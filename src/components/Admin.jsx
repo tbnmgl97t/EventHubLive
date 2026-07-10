@@ -3962,6 +3962,134 @@ function CdnReadOnlyPanel({ records = [], channels = [], pricing, tournaments = 
   )
 }
 
+// ─── BrightSpot CMS integration ───────────────────────────────────────────────
+// Defaults point at Griffin's UAT BrightSpot instance (the environment this
+// integration was built/spiked against) so the fields aren't blank on first load.
+const BRIGHTSPOT_DEFAULTS = {
+  cmsUrl:   'https://cms.griffin-uat.lower.griffin-media.brightspot.cloud',
+  news9Url: 'https://news9.griffin-uat.lower.griffin-media.brightspot.cloud',
+  apiKey:   'BIPiEDEezXTX6KJsgwN939PV4XwJyshyzZm2NXB',
+}
+
+function BrightSpotSettingsPanel({ token, tenantId }) {
+  const [cmsUrl, setCmsUrl]     = useState(BRIGHTSPOT_DEFAULTS.cmsUrl)
+  const [news9Url, setNews9Url] = useState(BRIGHTSPOT_DEFAULTS.news9Url)
+  const [apiKey, setApiKey]     = useState(BRIGHTSPOT_DEFAULTS.apiKey)
+  const [configured, setConfigured] = useState(false)
+  const [loading, setLoading]   = useState(true)
+  const [saving, setSaving]     = useState(false)
+  const [saved, setSaved]       = useState(false)
+  const [error, setError]       = useState('')
+  const [testing, setTesting]   = useState(false)
+  const [testResult, setTestResult] = useState(null) // { severity, message } | null
+
+  const fetchConfig = useCallback(() => {
+    setLoading(true)
+    fetch('/api/tenant', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        setCmsUrl(data?.brightspot_cms_url || BRIGHTSPOT_DEFAULTS.cmsUrl)
+        setNews9Url(data?.brightspot_news9_url || BRIGHTSPOT_DEFAULTS.news9Url)
+        setApiKey(data?.brightspot_api_key || BRIGHTSPOT_DEFAULTS.apiKey)
+        setConfigured(!!data?.brightspot_cms_url)
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [token, tenantId])
+
+  useEffect(() => { fetchConfig() }, [fetchConfig])
+
+  async function handleSave(e) {
+    e.preventDefault()
+    setSaving(true); setError(''); setSaved(false)
+    try {
+      const body = {
+        brightspot_cms_url:   cmsUrl.trim() || null,
+        brightspot_news9_url: news9Url.trim() || null,
+        brightspot_api_key:   apiKey.trim() || null,
+      }
+      const res = await fetch('/api/tenant', {
+        method: 'PUT',
+        headers: authHeader(token, tenantId),
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to save')
+      setConfigured(!!data.brightspot_cms_url)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleTest() {
+    setTesting(true); setTestResult(null)
+    try {
+      const res = await fetch('/api/brightspot-proxy', {
+        method: 'POST',
+        headers: authHeader(token, tenantId),
+        body: JSON.stringify({
+          url:      (news9Url || cmsUrl).trim(),
+          apiKey:   apiKey.trim(),
+          endpoint: '/api/getAlerts',
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      const summary = typeof data.body === 'string' ? data.body : JSON.stringify(data.body)
+      if (data.ok && data.body?.status === 'ok') {
+        setTestResult({ severity: 'success', message: `Connected — ${summary}` })
+      } else if (data.ok) {
+        setTestResult({ severity: 'warning', message: `Responded (HTTP ${data.status}) — ${summary}` })
+      } else {
+        setTestResult({ severity: 'error', message: `BrightSpot returned HTTP ${data.status} — ${summary}` })
+      }
+    } catch (err) {
+      setTestResult({ severity: 'error', message: err.message })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+        <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>BrightSpot CMS</Typography>
+        <Chip label={configured ? 'Configured' : 'Not configured'} size="small"
+          sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700,
+            bgcolor: configured ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)',
+            color: configured ? '#10b981' : '#f59e0b' }} />
+      </Box>
+
+      {loading ? (
+        <CircularProgress size={20} sx={{ color: AP.accent }} />
+      ) : (
+        <Box component="form" onSubmit={handleSave} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxWidth: 480 }}>
+          {error && <Alert severity="error" sx={{ fontSize: '0.78rem' }}>{error}</Alert>}
+          {testResult && <Alert severity={testResult.severity} sx={{ fontSize: '0.78rem', wordBreak: 'break-word' }}>{testResult.message}</Alert>}
+          <TextField size="small" label="CMS URL" fullWidth value={cmsUrl} onChange={e => setCmsUrl(e.target.value)} />
+          <TextField size="small" label="News9 URL (optional)" fullWidth value={news9Url} onChange={e => setNews9Url(e.target.value)} />
+          <TextField size="small" type="password" label="API Key" fullWidth value={apiKey} onChange={e => setApiKey(e.target.value)} />
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button variant="outlined" size="small" onClick={handleTest} disabled={testing}
+              sx={{ borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent, bgcolor: AP.accentDim } }}>
+              {testing ? <CircularProgress size={16} sx={{ color: AP.accent }} /> : 'Test Connection'}
+            </Button>
+            <Button type="submit" variant="contained" disabled={saving} size="small"
+              sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
+              {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : saved ? 'Saved' : 'Save'}
+            </Button>
+          </Box>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+
 // ─── Team management (per-tenant Admin/Read-only members) ────────────────────
 
 function TenantMembersPanel({ token, tenantId, canManage }) {
@@ -5424,6 +5552,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                   <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.1em', color: AP.muted, textTransform: 'uppercase' }}>Integrations</Typography>
                   <YouTubeIntegrationPanel  token={token} tenantId={tenantId} />
                   <FacebookIntegrationPanel token={token} tenantId={tenantId} />
+                  <BrightSpotSettingsPanel  token={token} tenantId={tenantId} />
                 </Box>
 
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
