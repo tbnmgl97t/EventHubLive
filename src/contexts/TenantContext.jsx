@@ -5,7 +5,7 @@ export const DEFAULT_TENANT = {
   title:    'EventHub Live',
   subtitle: 'Live Event Streaming Platform',
   logo_url: '',
-  timezone: 'ET',
+  timezone: 'America/New_York',
   colors: {
     primary:    '#e65d2c',
     secondary:  '#0a205a',

@@ -3,64 +3,43 @@ import {
   Box, Paper, Typography, TextField, Button, CircularProgress,
   Alert, IconButton, Chip, Tooltip, Snackbar, MenuItem,
   Table, TableBody, TableCell, TableHead, TableRow,
-  AppBar, Toolbar, Tabs, Tab, Dialog, DialogTitle,
-  DialogContent, DialogActions, Divider, Stack,
+  Dialog, DialogTitle, DialogContent, DialogActions, Divider,
 } from '@mui/material'
-import { ThemeProvider, CssBaseline, createTheme } from '@mui/material'
-import AddIcon            from '@mui/icons-material/Add'
-import DeleteIcon         from '@mui/icons-material/Delete'
-import EditIcon           from '@mui/icons-material/Edit'
-import LogoutIcon         from '@mui/icons-material/Logout'
-import RefreshIcon        from '@mui/icons-material/Refresh'
-import SaveIcon           from '@mui/icons-material/Save'
-import AttachMoneyIcon    from '@mui/icons-material/AttachMoney'
-import CloudIcon          from '@mui/icons-material/Cloud'
-import TuneIcon           from '@mui/icons-material/Tune'
-import BarChartIcon       from '@mui/icons-material/BarChart'
-import BuildIcon          from '@mui/icons-material/Build'
+import AddIcon         from '@mui/icons-material/Add'
+import DeleteIcon      from '@mui/icons-material/Delete'
+import EditIcon        from '@mui/icons-material/Edit'
+import RefreshIcon     from '@mui/icons-material/Refresh'
+import SaveIcon        from '@mui/icons-material/Save'
+import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
+import CloudIcon       from '@mui/icons-material/Cloud'
+import TuneIcon        from '@mui/icons-material/Tune'
 
-const SESSION_KEY = 'ri_td_admin_token'
+// ─── CDN Records & Pricing panels ──────────────────────────────────────────────
+//
+// These panels used to live in a standalone "TD Admin" component (now
+// removed), gated behind a Trilogy-Digital-only password.
+// They are now Super-Admin-only panels inside the main admin app. The data
+// stays global/agency-wide — it is intentionally NOT scoped to any tenant, so
+// these components do not send any tenant header, matching /api/cdn-records
+// and /api/pricing which remain global, Super-Admin-gated endpoints.
 
-// ─── TD Admin palette (teal accent to distinguish from tenant admin) ──────────
-
-const TP = {
-  accent:    '#0ea5e9',
-  accentHov: '#0284c7',
-  accentDim: 'rgba(14,165,233,0.08)',
-  accentMid: 'rgba(14,165,233,0.15)',
-  accentBdr: 'rgba(14,165,233,0.3)',
-  accentBdr2:'rgba(14,165,233,0.5)',
-  success:   '#10b981',
-  warn:      '#f59e0b',
+// Palette matching the indigo accent used elsewhere in the admin dashboard
+// (see AP in Admin.jsx) — duplicated locally since this file is standalone.
+const AP = {
+  accent:    '#6366f1',
+  accentHov: '#4f46e5',
+  accentDim: 'rgba(99,102,241,0.08)',
+  accentBdr: 'rgba(99,102,241,0.3)',
   danger:    '#ef4444',
-  bg:        '#0a0f1e',
-  paper:     '#111827',
+  paper:     '#161b2e',
   border:    'rgba(255,255,255,0.08)',
   muted:     '#94a3b8',
   text:      '#e2e8f0',
 }
 
-const tdTheme = createTheme({
-  palette: {
-    mode: 'dark',
-    primary:    { main: TP.accent, contrastText: '#fff' },
-    background: { default: TP.bg, paper: TP.paper },
-    text:       { primary: TP.text, secondary: TP.muted },
-    divider:    TP.border,
-  },
-  typography: { fontFamily: "'Poppins', sans-serif" },
-  shape:      { borderRadius: 8 },
-  components: {
-    MuiButton:  { styleOverrides: { root: { textTransform: 'none', fontWeight: 600 } } },
-    MuiPaper:   { styleOverrides: { root: { backgroundImage: 'none', border: `1px solid ${TP.border}` } } },
-    MuiTab:     { styleOverrides: { root: { textTransform: 'none', fontWeight: 600 } } },
-    MuiTableCell: { styleOverrides: { root: { borderColor: TP.border } } },
-  },
-})
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function tdAuthHeader(token) {
+function authHeader(token) {
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
 }
 
@@ -89,43 +68,21 @@ function monthLabel(yyyymm) {
   return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
 }
 
-// ─── SectionHeader ────────────────────────────────────────────────────────────
-
 function SectionHeader({ icon, title, action }) {
   return (
     <Box sx={{
       px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      borderBottom: `1px solid ${TP.border}`,
-      background: `linear-gradient(90deg, ${TP.accentDim} 0%, transparent 60%)`,
+      borderBottom: `1px solid ${AP.border}`,
+      background: `linear-gradient(90deg, ${AP.accentDim} 0%, transparent 60%)`,
     }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        {React.cloneElement(icon, { sx: { color: TP.accent, fontSize: 18 } })}
+        {React.cloneElement(icon, { sx: { color: AP.accent, fontSize: 18 } })}
         <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem' }}>
           {title}
         </Typography>
       </Box>
       {action}
     </Box>
-  )
-}
-
-// ─── StatCard ─────────────────────────────────────────────────────────────────
-
-function StatCard({ label, value, sub }) {
-  return (
-    <Paper elevation={0} sx={{ p: 2, flex: 1, minWidth: 140 }}>
-      <Typography variant="caption" sx={{ color: TP.muted, letterSpacing: '0.08em', fontSize: '0.65rem', textTransform: 'uppercase' }}>
-        {label}
-      </Typography>
-      <Typography sx={{ fontSize: '1.5rem', fontWeight: 700, color: TP.accent, lineHeight: 1.2, mt: 0.5 }}>
-        {value}
-      </Typography>
-      {sub && (
-        <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.68rem' }}>
-          {sub}
-        </Typography>
-      )}
-    </Paper>
   )
 }
 
@@ -183,8 +140,8 @@ function CdnRecordDialog({ open, initial, tournaments, pricing, onClose, onSave 
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm"
-      PaperProps={{ sx: { bgcolor: TP.paper, border: `1px solid ${TP.border}` } }}>
-      <DialogTitle sx={{ borderBottom: `1px solid ${TP.border}`, py: 1.5, px: 2, fontSize: '0.95rem', fontWeight: 700 }}>
+      PaperProps={{ sx: { bgcolor: AP.paper, border: `1px solid ${AP.border}` } }}>
+      <DialogTitle sx={{ borderBottom: `1px solid ${AP.border}`, py: 1.5, px: 2, fontSize: '0.95rem', fontWeight: 700 }}>
         {initial ? 'Edit CDN Record' : 'Add CDN Record'}
       </DialogTitle>
       <DialogContent sx={{ pt: '20px !important', pb: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -208,7 +165,7 @@ function CdnRecordDialog({ open, initial, tournaments, pricing, onClose, onSave 
             size="small" fullWidth placeholder="Main Deck" />
         </Box>
         <Divider />
-        <Typography variant="caption" sx={{ color: TP.muted, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        <Typography variant="caption" sx={{ color: AP.muted, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Usage Data
         </Typography>
         <Box sx={{ display: 'flex', gap: 2 }}>
@@ -217,188 +174,45 @@ function CdnRecordDialog({ open, initial, tournaments, pricing, onClose, onSave 
             helperText="How long feed ran" />
           <TextField label="Minutes Delivered" type="number" value={form.minutes_delivered} onChange={set('minutes_delivered')}
             size="small" fullWidth inputProps={{ step: '1', min: 0 }}
-            helperText="From JW analytics" />
+            helperText="From CDN analytics" />
         </Box>
 
         {/* Live cost preview */}
         {(hrs > 0 || mins > 0) && (
           <Box sx={{
-            p: 1.5, borderRadius: 1, bgcolor: TP.accentDim,
-            border: `1px solid ${TP.accentBdr}`, display: 'flex', gap: 3, flexWrap: 'wrap',
+            p: 1.5, borderRadius: 1, bgcolor: AP.accentDim,
+            border: `1px solid ${AP.accentBdr}`, display: 'flex', gap: 3, flexWrap: 'wrap',
           }}>
             <Box>
-              <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>GB Delivered</Typography>
+              <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>GB Delivered</Typography>
               <Typography sx={{ fontSize: '0.9rem', fontWeight: 700 }}>{gb_preview.toFixed(2)} GB</Typography>
             </Box>
             <Box>
-              <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>Feed Fee</Typography>
+              <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>Feed Fee</Typography>
               <Typography sx={{ fontSize: '0.9rem', fontWeight: 700 }}>${cost_feed.toFixed(2)}</Typography>
             </Box>
             <Box>
-              <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>CDN Cost</Typography>
+              <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>CDN Cost</Typography>
               <Typography sx={{ fontSize: '0.9rem', fontWeight: 700 }}>${cost_cdn.toFixed(2)}</Typography>
             </Box>
             <Box>
-              <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>Total</Typography>
-              <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: TP.accent }}>${cost_total.toFixed(2)}</Typography>
+              <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>Total</Typography>
+              <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: AP.accent }}>${cost_total.toFixed(2)}</Typography>
             </Box>
           </Box>
         )}
       </DialogContent>
       <DialogActions sx={{ px: 2, pb: 2 }}>
-        <Button onClick={onClose} size="small" sx={{ color: TP.muted }}>Cancel</Button>
+        <Button onClick={onClose} size="small" sx={{ color: AP.muted }}>Cancel</Button>
         <Button
           variant="contained" size="small" startIcon={<SaveIcon />}
           onClick={handleSave} disabled={!isValid || saving}
-          sx={{ bgcolor: TP.accent, '&:hover': { bgcolor: TP.accentHov } }}
+          sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}
         >
           {saving ? 'Saving…' : 'Save'}
         </Button>
       </DialogActions>
     </Dialog>
-  )
-}
-
-// ─── Overview tab ─────────────────────────────────────────────────────────────
-
-function OverviewTab({ records, pricing, tournaments }) {
-  const grandTotal      = records.reduce((s, r) => s + (r.cost_total        || 0), 0)
-  const totalFeedCost   = records.reduce((s, r) => s + (r.cost_feed         || 0), 0)
-  const totalCdnCost    = records.reduce((s, r) => s + (r.cost_cdn          || 0), 0)
-  const totalDelivered  = records.reduce((s, r) => s + (r.gb_delivered      || 0), 0)
-  const totalStreamHrs  = records.reduce((s, r) => s + (r.stream_hours      || 0), 0)
-  const totalMinsDel    = records.reduce((s, r) => s + (r.minutes_delivered || 0), 0)
-
-  // Per-tournament rollup
-  const byTournament = tournaments.map(t => {
-    const tRecs = records.filter(r => Number(r.tournament_id) === t.id)
-    return {
-      ...t,
-      feeds:        tRecs.length,
-      stream_hours: tRecs.reduce((s, r) => s + (r.stream_hours      || 0), 0),
-      gb_delivered: tRecs.reduce((s, r) => s + (r.gb_delivered      || 0), 0),
-      cost_feed:    tRecs.reduce((s, r) => s + (r.cost_feed         || 0), 0),
-      cost_cdn:     tRecs.reduce((s, r) => s + (r.cost_cdn          || 0), 0),
-      cost_total:   tRecs.reduce((s, r) => s + (r.cost_total        || 0), 0),
-    }
-  }).filter(t => t.feeds > 0)
-
-  // Unattributed records (no tournament_id)
-  const unattributed = records.filter(r => !r.tournament_id)
-  if (unattributed.length > 0) {
-    byTournament.push({
-      id: null, name: 'Unattributed', location: '—',
-      feeds:        unattributed.length,
-      stream_hours: unattributed.reduce((s, r) => s + (r.stream_hours || 0), 0),
-      gb_delivered: unattributed.reduce((s, r) => s + (r.gb_delivered || 0), 0),
-      cost_feed:    unattributed.reduce((s, r) => s + (r.cost_feed    || 0), 0),
-      cost_cdn:     unattributed.reduce((s, r) => s + (r.cost_cdn     || 0), 0),
-      cost_total:   unattributed.reduce((s, r) => s + (r.cost_total   || 0), 0),
-    })
-  }
-
-  // Monthly rollup
-  const monthMap = {}
-  records.forEach(r => {
-    const mk = monthKey(r.date)
-    if (!monthMap[mk]) monthMap[mk] = { feeds: 0, stream_hours: 0, gb_delivered: 0, cost_feed: 0, cost_cdn: 0, cost_total: 0 }
-    monthMap[mk].feeds++
-    monthMap[mk].stream_hours  += r.stream_hours      || 0
-    monthMap[mk].gb_delivered  += r.gb_delivered      || 0
-    monthMap[mk].cost_feed     += r.cost_feed         || 0
-    monthMap[mk].cost_cdn      += r.cost_cdn          || 0
-    monthMap[mk].cost_total    += r.cost_total        || 0
-  })
-  const months = Object.entries(monthMap).sort(([a], [b]) => b.localeCompare(a))
-
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-
-      {/* Stat cards */}
-      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-        <StatCard label="Total Cost"       value={fmtUSD(grandTotal)}                       sub={`${records.length} feeds`} />
-        <StatCard label="Feed Fees"        value={fmtUSD(totalFeedCost)}                    sub={`${totalStreamHrs.toFixed(1)} stream hrs`} />
-        <StatCard label="CDN Cost"         value={fmtUSD(totalCdnCost)}                     sub={fmtGB(totalDelivered) + ' delivered'} />
-        <StatCard label="Mins Delivered"   value={totalMinsDel.toLocaleString()}             sub="viewer-minutes" />
-      </Box>
-
-      {/* Per-tournament */}
-      {byTournament.length > 0 && (
-        <Paper elevation={0}>
-          <SectionHeader icon={<BarChartIcon />} title="BY EVENT" />
-          <Box sx={{ overflowX: 'auto' }}>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  {['Event', 'Feeds', 'Stream Hrs', 'GB Delivered', 'Feed Fees', 'CDN Cost', 'Total'].map(h => (
-                    <TableCell key={h} sx={{ color: TP.muted, fontSize: '0.7rem', fontWeight: 600 }}>{h}</TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {byTournament.map(t => (
-                  <TableRow key={t.id ?? 'unattr'} hover>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>
-                      <Typography sx={{ fontSize: '0.8rem', fontWeight: 600 }}>{t.name}</Typography>
-                      {t.location !== '—' && (
-                        <Typography sx={{ fontSize: '0.68rem', color: TP.muted }}>{t.location}</Typography>
-                      )}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{t.feeds}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{t.stream_hours.toFixed(1)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{fmtGB(t.gb_delivered)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{fmtUSD(t.cost_feed)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{fmtUSD(t.cost_cdn)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem', fontWeight: 700, color: TP.accent }}>{fmtUSD(t.cost_total)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Box>
-        </Paper>
-      )}
-
-      {/* Monthly rollup */}
-      {months.length > 0 && (
-        <Paper elevation={0}>
-          <SectionHeader icon={<BarChartIcon />} title="MONTHLY ROLLUP" />
-          <Box sx={{ overflowX: 'auto' }}>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  {['Month', 'Feeds', 'Stream Hrs', 'GB Delivered', 'Feed Fees', 'CDN Cost', 'Total'].map(h => (
-                    <TableCell key={h} sx={{ color: TP.muted, fontSize: '0.7rem', fontWeight: 600 }}>{h}</TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {months.map(([mk, m]) => (
-                  <TableRow key={mk} hover>
-                    <TableCell sx={{ fontSize: '0.8rem', fontWeight: 600 }}>{monthLabel(mk)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{m.feeds}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{m.stream_hours.toFixed(1)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{fmtGB(m.gb_delivered)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{fmtUSD(m.cost_feed)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{fmtUSD(m.cost_cdn)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem', fontWeight: 700, color: TP.accent }}>{fmtUSD(m.cost_total)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Box>
-        </Paper>
-      )}
-
-      {records.length === 0 && (
-        <Box sx={{ textAlign: 'center', py: 6 }}>
-          <CloudIcon sx={{ fontSize: 48, color: 'rgba(255,255,255,0.1)', mb: 1 }} />
-          <Typography sx={{ color: TP.muted }}>No CDN records yet.</Typography>
-          <Typography variant="caption" sx={{ color: 'rgba(148,163,184,0.5)' }}>
-            Add records in the CDN Records tab after pulling reports from JW.
-          </Typography>
-        </Box>
-      )}
-    </Box>
   )
 }
 
@@ -465,7 +279,7 @@ function LogFromJwDialog({ open, channels, records, tournaments, pricing, token,
           minutes_delivered: Number(minutesMap[ch.id]),
         }
         const res = await fetch('/api/cdn-records', {
-          method: 'POST', headers: tdAuthHeader(token), body: JSON.stringify(body),
+          method: 'POST', headers: authHeader(token), body: JSON.stringify(body),
         })
         if (!res.ok) {
           const d = await res.json()
@@ -484,24 +298,24 @@ function LogFromJwDialog({ open, channels, records, tournaments, pricing, token,
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="md"
-      PaperProps={{ sx: { bgcolor: TP.paper, border: `1px solid ${TP.border}` } }}>
-      <DialogTitle sx={{ borderBottom: `1px solid ${TP.border}`, py: 1.5, px: 2, fontSize: '0.95rem', fontWeight: 700 }}>
-        Log CDN Usage from JW Feeds
+      PaperProps={{ sx: { bgcolor: AP.paper, border: `1px solid ${AP.border}` } }}>
+      <DialogTitle sx={{ borderBottom: `1px solid ${AP.border}`, py: 1.5, px: 2, fontSize: '0.95rem', fontWeight: 700 }}>
+        Log CDN Usage
       </DialogTitle>
       <DialogContent sx={{ pt: 2, pb: 1 }}>
-        <Typography variant="caption" sx={{ color: TP.muted, mb: 2, display: 'block' }}>
-          Stream hours are pulled from JW automatically. Enter <strong>Minutes Delivered</strong> from the JW analytics dashboard for each feed you want to log.
+        <Typography variant="caption" sx={{ color: AP.muted, mb: 2, display: 'block' }}>
+          Stream hours are pulled automatically. Enter <strong>Minutes Delivered</strong> from the analytics dashboard for each feed you want to log.
         </Typography>
 
         {loggable.length === 0 ? (
-          <Typography sx={{ color: TP.muted, py: 2, textAlign: 'center' }}>No JW feeds with stream data found.</Typography>
+          <Typography sx={{ color: AP.muted, py: 2, textAlign: 'center' }}>No feeds with stream data found.</Typography>
         ) : (
           <Box sx={{ overflowX: 'auto' }}>
             <Table size="small">
               <TableHead>
                 <TableRow>
                   {['Feed', 'Date', 'Stream Hrs', 'Event', 'Mins Delivered', 'Est. Cost'].map(h => (
-                    <TableCell key={h} sx={{ color: TP.muted, fontSize: '0.7rem', fontWeight: 600 }}>{h}</TableCell>
+                    <TableCell key={h} sx={{ color: AP.muted, fontSize: '0.7rem', fontWeight: 600 }}>{h}</TableCell>
                   ))}
                 </TableRow>
               </TableHead>
@@ -517,7 +331,7 @@ function LogFromJwDialog({ open, channels, records, tournaments, pricing, token,
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                           <Box>
                             <Typography sx={{ fontSize: '0.78rem', fontWeight: 600 }}>{ch.name || ch.id}</Typography>
-                            <Typography sx={{ fontSize: '0.65rem', color: TP.muted, fontFamily: 'monospace' }}>{ch.id}</Typography>
+                            <Typography sx={{ fontSize: '0.65rem', color: AP.muted, fontFamily: 'monospace' }}>{ch.id}</Typography>
                           </Box>
                           {logged && (
                             <Chip label="LOGGED" size="small" sx={{
@@ -531,7 +345,7 @@ function LogFromJwDialog({ open, channels, records, tournaments, pricing, token,
                       <TableCell sx={{ fontSize: '0.78rem' }}>{hrs.toFixed(2)}h</TableCell>
                       <TableCell>
                         {logged ? (
-                          <Typography sx={{ fontSize: '0.75rem', color: TP.muted }}>Already logged</Typography>
+                          <Typography sx={{ fontSize: '0.75rem', color: AP.muted }}>Already logged</Typography>
                         ) : (
                           <TextField select size="small" value={tournamentMap[ch.id] || ''}
                             onChange={e => setTournamentMap(m => ({ ...m, [ch.id]: e.target.value }))}
@@ -543,7 +357,7 @@ function LogFromJwDialog({ open, channels, records, tournaments, pricing, token,
                       </TableCell>
                       <TableCell>
                         {logged ? (
-                          <Typography sx={{ fontSize: '0.75rem', color: TP.muted }}>{Number(logged.minutes_delivered).toLocaleString()} min</Typography>
+                          <Typography sx={{ fontSize: '0.75rem', color: AP.muted }}>{Number(logged.minutes_delivered).toLocaleString()} min</Typography>
                         ) : (
                           <TextField type="number" size="small" placeholder="e.g. 2029"
                             value={minutesMap[ch.id] ?? ''}
@@ -552,7 +366,7 @@ function LogFromJwDialog({ open, channels, records, tournaments, pricing, token,
                             sx={{ width: 110, '& .MuiInputBase-root': { fontSize: '0.8rem', height: 32 } }} />
                         )}
                       </TableCell>
-                      <TableCell sx={{ fontSize: '0.78rem', fontWeight: 700, color: logged ? '#10b981' : hasMins ? TP.accent : TP.muted }}>
+                      <TableCell sx={{ fontSize: '0.78rem', fontWeight: 700, color: logged ? '#10b981' : hasMins ? AP.accent : AP.muted }}>
                         {logged ? `$${logged.cost_total?.toFixed(2)}` : hasMins ? `$${cost.total.toFixed(2)}` : '—'}
                       </TableCell>
                     </TableRow>
@@ -564,10 +378,10 @@ function LogFromJwDialog({ open, channels, records, tournaments, pricing, token,
         )}
       </DialogContent>
       <DialogActions sx={{ px: 2, pb: 2 }}>
-        <Button onClick={onClose} size="small" sx={{ color: TP.muted }}>Cancel</Button>
+        <Button onClick={onClose} size="small" sx={{ color: AP.muted }}>Cancel</Button>
         <Button variant="contained" size="small" startIcon={<SaveIcon />}
           onClick={handleSave} disabled={saving || loggable.length === 0}
-          sx={{ bgcolor: TP.accent, '&:hover': { bgcolor: TP.accentHov } }}>
+          sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
           {saving ? 'Saving…' : 'Log Feeds'}
         </Button>
       </DialogActions>
@@ -575,13 +389,45 @@ function LogFromJwDialog({ open, channels, records, tournaments, pricing, token,
   )
 }
 
-// ─── CDN Records tab ──────────────────────────────────────────────────────────
+// ─── CdnRecordsPanel ──────────────────────────────────────────────────────────
+// Super-Admin-only, global CDN usage/cost record management. Fetches its own
+// data (records, tournaments, channels, pricing) — takes just a `token` prop,
+// matching the panel convention used in Admin.jsx (e.g. TenantSettingsPanel).
 
-function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefresh, showSnack }) {
-  const [dialog, setDialog]       = useState({ open: false, initial: null })
-  const [jwDialog, setJwDialog]   = useState(false)
+export function CdnRecordsPanel({ token }) {
+  const [records, setRecords]         = useState([])
+  const [tournaments, setTournaments] = useState([])
+  const [pricing, setPricing]         = useState(null)
+  const [channels, setChannels]       = useState([])
+  const [loading, setLoading]         = useState(true)
+  const [snack, setSnack]             = useState({ open: false, message: '', severity: 'success' })
+
+  const [dialog, setDialog]           = useState({ open: false, initial: null })
+  const [jwDialog, setJwDialog]       = useState(false)
   const [monthFilter, setMonthFilter] = useState('all')
-  const [deleting, setDeleting]   = useState(null)
+  const [deleting, setDeleting]       = useState(null)
+
+  const showSnack = (message, severity = 'success') => setSnack({ open: true, message, severity })
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [rRes, tRes, pRes, chRes] = await Promise.all([
+        fetch('/api/cdn-records', { headers: authHeader(token) }),
+        fetch('/api/tournaments'),
+        fetch('/api/pricing', { headers: authHeader(token) }),
+        fetch('/api/channels', { headers: { Authorization: `Bearer ${token}` } }),
+      ])
+      if (rRes.ok)  setRecords(await rRes.json())
+      if (tRes.ok)  setTournaments(await tRes.json())
+      if (pRes.ok)  setPricing(await pRes.json())
+      if (chRes.ok) { const d = await chRes.json(); setChannels(d.channels || []) }
+    } finally {
+      setLoading(false)
+    }
+  }, [token])
+
+  useEffect(() => { fetchAll() }, [fetchAll])
 
   // Build month options from existing records
   const months = [...new Set(records.map(r => monthKey(r.date)).filter(Boolean))].sort().reverse()
@@ -598,13 +444,13 @@ function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefre
       ...form,
       tournament_id: form.tournament_id !== '' ? Number(form.tournament_id) : null,
     }
-    const res = await fetch(url, { method, headers: tdAuthHeader(token), body: JSON.stringify(body) })
+    const res = await fetch(url, { method, headers: authHeader(token), body: JSON.stringify(body) })
     if (!res.ok) {
       const d = await res.json()
       throw new Error(d.error || 'Save failed')
     }
     showSnack(isEdit ? 'Record updated' : 'Record added')
-    onRefresh()
+    fetchAll()
   }
 
   async function handleDelete(id) {
@@ -612,12 +458,12 @@ function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefre
     try {
       const res = await fetch('/api/cdn-records', {
         method: 'DELETE',
-        headers: tdAuthHeader(token),
+        headers: authHeader(token),
         body: JSON.stringify({ id }),
       })
       if (!res.ok) throw new Error('Delete failed')
       showSnack('Record deleted', 'info')
-      onRefresh()
+      fetchAll()
     } catch (err) {
       showSnack(err.message, 'error')
     } finally {
@@ -629,9 +475,15 @@ function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefre
   const subtotalFeed = filtered.reduce((s, r) => s + (r.cost_feed   || 0), 0)
   const subtotalCdn  = filtered.reduce((s, r) => s + (r.cost_cdn    || 0), 0)
 
+  if (loading) return (
+    <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
+      <CircularProgress size={28} sx={{ color: AP.accent }} />
+    </Box>
+  )
+
   return (
     <>
-      <Paper elevation={0}>
+      <Paper elevation={0} sx={{ border: `1px solid ${AP.border}`, borderRadius: 2, overflow: 'hidden' }}>
         <SectionHeader
           icon={<CloudIcon />}
           title="CDN RECORDS"
@@ -648,21 +500,21 @@ function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefre
                 ))}
               </TextField>
               <Tooltip title="Refresh">
-                <IconButton size="small" onClick={onRefresh} sx={{ color: TP.muted }}>
+                <IconButton size="small" onClick={fetchAll} sx={{ color: AP.muted }}>
                   <RefreshIcon sx={{ fontSize: 18 }} />
                 </IconButton>
               </Tooltip>
               <Button
                 size="small" variant="contained"
                 onClick={() => setJwDialog(true)}
-                sx={{ fontSize: '0.72rem', bgcolor: TP.accent, '&:hover': { bgcolor: TP.accentHov } }}
+                sx={{ fontSize: '0.72rem', bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}
               >
-                Log from JW
+                Log CDN Usage
               </Button>
               <Button
                 size="small" variant="outlined" startIcon={<AddIcon />}
                 onClick={() => setDialog({ open: true, initial: null })}
-                sx={{ fontSize: '0.72rem', borderColor: TP.accentBdr, color: TP.accent, '&:hover': { borderColor: TP.accent } }}
+                sx={{ fontSize: '0.72rem', borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent } }}
               >
                 Manual Entry
               </Button>
@@ -672,7 +524,7 @@ function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefre
 
         {filtered.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 4 }}>
-            <Typography variant="body2" sx={{ color: TP.muted }}>No records for this period.</Typography>
+            <Typography variant="body2" sx={{ color: AP.muted }}>No records for this period.</Typography>
           </Box>
         ) : (
           <Box sx={{ overflowX: 'auto' }}>
@@ -680,7 +532,7 @@ function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefre
               <TableHead>
                 <TableRow>
                   {['Date', 'Label', 'Channel', 'Stream Hrs', 'Mins Del.', 'GB Del.', 'Feed Fee', 'CDN Cost', 'Total', ''].map(h => (
-                    <TableCell key={h} sx={{ color: TP.muted, fontSize: '0.7rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</TableCell>
+                    <TableCell key={h} sx={{ color: AP.muted, fontSize: '0.7rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</TableCell>
                   ))}
                 </TableRow>
               </TableHead>
@@ -691,25 +543,25 @@ function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefre
                     <TableCell sx={{ fontSize: '0.78rem' }}>{r.label}</TableCell>
                     <TableCell sx={{ fontSize: '0.78rem' }}>
                       <Typography sx={{ fontSize: '0.78rem', fontWeight: 600 }}>{r.channel_name}</Typography>
-                      <Typography sx={{ fontSize: '0.65rem', color: TP.muted, fontFamily: 'monospace' }}>{r.channel_id}</Typography>
+                      <Typography sx={{ fontSize: '0.65rem', color: AP.muted, fontFamily: 'monospace' }}>{r.channel_id}</Typography>
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.78rem' }}>{r.stream_hours}h</TableCell>
                     <TableCell sx={{ fontSize: '0.78rem' }}>{Number(r.minutes_delivered).toLocaleString()}</TableCell>
                     <TableCell sx={{ fontSize: '0.78rem' }}>{fmtGB(r.gb_delivered)}</TableCell>
                     <TableCell sx={{ fontSize: '0.78rem' }}>{fmtUSD(r.cost_feed)}</TableCell>
                     <TableCell sx={{ fontSize: '0.78rem' }}>{fmtUSD(r.cost_cdn)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.78rem', fontWeight: 700, color: TP.accent }}>{fmtUSD(r.cost_total)}</TableCell>
+                    <TableCell sx={{ fontSize: '0.78rem', fontWeight: 700, color: AP.accent }}>{fmtUSD(r.cost_total)}</TableCell>
                     <TableCell align="right">
                       <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'flex-end' }}>
                         <Tooltip title="Edit">
-                          <IconButton size="small" onClick={() => setDialog({ open: true, initial: r })} sx={{ color: TP.muted, '&:hover': { color: TP.accent } }}>
+                          <IconButton size="small" onClick={() => setDialog({ open: true, initial: r })} sx={{ color: AP.muted, '&:hover': { color: AP.accent } }}>
                             <EditIcon sx={{ fontSize: 15 }} />
                           </IconButton>
                         </Tooltip>
                         <Tooltip title="Delete">
                           <IconButton size="small" disabled={deleting === r.id}
                             onClick={() => handleDelete(r.id)}
-                            sx={{ color: TP.muted, '&:hover': { color: TP.danger } }}>
+                            sx={{ color: AP.muted, '&:hover': { color: AP.danger } }}>
                             {deleting === r.id
                               ? <CircularProgress size={13} />
                               : <DeleteIcon sx={{ fontSize: 15 }} />}
@@ -720,14 +572,14 @@ function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefre
                   </TableRow>
                 ))}
                 {/* Subtotal row */}
-                <TableRow sx={{ bgcolor: TP.accentDim }}>
-                  <TableCell colSpan={7} sx={{ fontSize: '0.75rem', fontWeight: 700, color: TP.muted }}>
+                <TableRow sx={{ bgcolor: AP.accentDim }}>
+                  <TableCell colSpan={7} sx={{ fontSize: '0.75rem', fontWeight: 700, color: AP.muted }}>
                     {monthFilter === 'all' ? 'Grand Total' : `${monthLabel(monthFilter)} Total`}
                     {' '}({filtered.length} records)
                   </TableCell>
-                  <TableCell sx={{ fontSize: '0.78rem', color: TP.muted }}>{fmtUSD(subtotalFeed)}</TableCell>
-                  <TableCell sx={{ fontSize: '0.78rem', color: TP.muted }}>{fmtUSD(subtotalCdn)}</TableCell>
-                  <TableCell colSpan={2} sx={{ fontSize: '0.85rem', fontWeight: 800, color: TP.accent }}>
+                  <TableCell sx={{ fontSize: '0.78rem', color: AP.muted }}>{fmtUSD(subtotalFeed)}</TableCell>
+                  <TableCell sx={{ fontSize: '0.78rem', color: AP.muted }}>{fmtUSD(subtotalCdn)}</TableCell>
+                  <TableCell colSpan={2} sx={{ fontSize: '0.85rem', fontWeight: 800, color: AP.accent }}>
                     {fmtUSD(subtotal)}
                   </TableCell>
                 </TableRow>
@@ -754,20 +606,51 @@ function CdnRecordsTab({ records, tournaments, pricing, channels, token, onRefre
         pricing={pricing}
         token={token}
         onClose={() => setJwDialog(false)}
-        onSaved={onRefresh}
+        onSaved={fetchAll}
         showSnack={showSnack}
       />
+
+      <Snackbar
+        open={snack.open}
+        autoHideDuration={4000}
+        onClose={() => setSnack(s => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity={snack.severity} onClose={() => setSnack(s => ({ ...s, open: false }))}>
+          {snack.message}
+        </Alert>
+      </Snackbar>
     </>
   )
 }
 
-// ─── Pricing tab ──────────────────────────────────────────────────────────────
+// ─── PricingPanel ─────────────────────────────────────────────────────────────
+// Super-Admin-only, global CDN/feed pricing rate management (global rates +
+// per-channel overrides). Fetches its own pricing config — takes just a
+// `token` prop, matching the panel convention used in Admin.jsx.
 
-function PricingTab({ pricing, token, onRefresh, showSnack }) {
-  const [rates, setRates]         = useState({ feed_rate_per_hr: '', cdn_rate_per_gb: '', gb_per_50_min: '' })
-  const [overrides, setOverrides] = useState({})
+export function PricingPanel({ token }) {
+  const [pricing, setPricing]         = useState(null)
+  const [loading, setLoading]         = useState(true)
+  const [snack, setSnack]             = useState({ open: false, message: '', severity: 'success' })
+  const [rates, setRates]             = useState({ feed_rate_per_hr: '', cdn_rate_per_gb: '', gb_per_50_min: '' })
+  const [overrides, setOverrides]     = useState({})
   const [savingRates, setSavingRates] = useState(false)
   const [newOverride, setNewOverride] = useState({ channel_id: '', name: '', feed_rate_per_hr: '', cdn_rate_per_gb: '' })
+
+  const showSnack = (message, severity = 'success') => setSnack({ open: true, message, severity })
+
+  const fetchPricing = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/pricing', { headers: authHeader(token) })
+      if (res.ok) setPricing(await res.json())
+    } finally {
+      setLoading(false)
+    }
+  }, [token])
+
+  useEffect(() => { fetchPricing() }, [fetchPricing])
 
   useEffect(() => {
     if (pricing) {
@@ -793,7 +676,7 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
     try {
       const res = await fetch('/api/pricing', {
         method: 'PUT',
-        headers: tdAuthHeader(token),
+        headers: authHeader(token),
         body: JSON.stringify({
           feed_rate_per_hr: Number(rates.feed_rate_per_hr),
           cdn_rate_per_gb:  Number(rates.cdn_rate_per_gb),
@@ -803,7 +686,7 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
       })
       if (!res.ok) throw new Error('Save failed')
       showSnack('Pricing saved')
-      onRefresh()
+      fetchPricing()
     } catch (err) {
       showSnack(err.message, 'error')
     } finally {
@@ -825,23 +708,29 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
     setOverrides(o => { const n = { ...o }; delete n[cid]; return n })
   }
 
+  if (loading) return (
+    <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
+      <CircularProgress size={28} sx={{ color: AP.accent }} />
+    </Box>
+  )
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
 
       {/* Global rates */}
-      <Paper elevation={0}>
+      <Paper elevation={0} sx={{ border: `1px solid ${AP.border}`, borderRadius: 2, overflow: 'hidden' }}>
         <SectionHeader icon={<AttachMoneyIcon />} title="GLOBAL RATES" />
         <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField label="Feed Rate" type="number" value={rates.feed_rate_per_hr}
               onChange={e => setRates(r => ({ ...r, feed_rate_per_hr: e.target.value }))}
               size="small" inputProps={{ step: '0.01', min: 0 }}
-              InputProps={{ startAdornment: <Typography sx={{ color: TP.muted, mr: 0.5, fontSize: '0.85rem' }}>$</Typography> }}
+              InputProps={{ startAdornment: <Typography sx={{ color: AP.muted, mr: 0.5, fontSize: '0.85rem' }}>$</Typography> }}
               helperText="per hour per feed" sx={{ flex: 1 }} />
             <TextField label="CDN Rate" type="number" value={rates.cdn_rate_per_gb}
               onChange={e => setRates(r => ({ ...r, cdn_rate_per_gb: e.target.value }))}
               size="small" inputProps={{ step: '0.001', min: 0 }}
-              InputProps={{ startAdornment: <Typography sx={{ color: TP.muted, mr: 0.5, fontSize: '0.85rem' }}>$</Typography> }}
+              InputProps={{ startAdornment: <Typography sx={{ color: AP.muted, mr: 0.5, fontSize: '0.85rem' }}>$</Typography> }}
               helperText="per GB delivered" sx={{ flex: 1 }} />
             <TextField label="Data Rate" type="number" value={rates.gb_per_50_min}
               onChange={e => setRates(r => ({ ...r, gb_per_50_min: e.target.value }))}
@@ -851,22 +740,22 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
 
           {/* Effective rate preview */}
           {totalPerHr > 0 && (
-            <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: TP.accentDim, border: `1px solid ${TP.accentBdr}`, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+            <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: AP.accentDim, border: `1px solid ${AP.accentBdr}`, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
               <Box>
-                <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>GB/hr per feed</Typography>
+                <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>GB/hr per feed</Typography>
                 <Typography sx={{ fontSize: '0.9rem', fontWeight: 700 }}>{gbPerHr.toFixed(2)} GB</Typography>
               </Box>
               <Box>
-                <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>Feed fee/hr</Typography>
+                <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>Feed fee/hr</Typography>
                 <Typography sx={{ fontSize: '0.9rem', fontWeight: 700 }}>${hrs.toFixed(2)}</Typography>
               </Box>
               <Box>
-                <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>CDN cost/hr</Typography>
+                <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>CDN cost/hr</Typography>
                 <Typography sx={{ fontSize: '0.9rem', fontWeight: 700 }}>${cdnPerHr.toFixed(2)}</Typography>
               </Box>
               <Box>
-                <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>Effective $/hr</Typography>
-                <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: TP.accent }}>${totalPerHr.toFixed(2)}</Typography>
+                <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem', textTransform: 'uppercase' }}>Effective $/hr</Typography>
+                <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: AP.accent }}>${totalPerHr.toFixed(2)}</Typography>
               </Box>
             </Box>
           )}
@@ -874,7 +763,7 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
           <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button variant="contained" size="small" startIcon={<SaveIcon />}
               onClick={saveRates} disabled={savingRates}
-              sx={{ bgcolor: TP.accent, '&:hover': { bgcolor: TP.accentHov } }}>
+              sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
               {savingRates ? 'Saving…' : 'Save Rates'}
             </Button>
           </Box>
@@ -882,11 +771,11 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
       </Paper>
 
       {/* Per-channel overrides */}
-      <Paper elevation={0}>
+      <Paper elevation={0} sx={{ border: `1px solid ${AP.border}`, borderRadius: 2, overflow: 'hidden' }}>
         <SectionHeader icon={<TuneIcon />} title="PER-CHANNEL OVERRIDES" />
         <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Typography variant="caption" sx={{ color: TP.muted }}>
-            Override global rates for specific JW channel IDs. Leave a field blank to inherit the global value.
+          <Typography variant="caption" sx={{ color: AP.muted }}>
+            Override global rates for specific channel IDs. Leave a field blank to inherit the global value.
           </Typography>
 
           {Object.keys(overrides).length > 0 && (
@@ -895,7 +784,7 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
                 <TableHead>
                   <TableRow>
                     {['Channel ID', 'Name', 'Feed Rate/hr', 'CDN Rate/GB', ''].map(h => (
-                      <TableCell key={h} sx={{ color: TP.muted, fontSize: '0.7rem', fontWeight: 600 }}>{h}</TableCell>
+                      <TableCell key={h} sx={{ color: AP.muted, fontSize: '0.7rem', fontWeight: 600 }}>{h}</TableCell>
                     ))}
                   </TableRow>
                 </TableHead>
@@ -907,7 +796,7 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
                       <TableCell sx={{ fontSize: '0.78rem' }}>{ov.feed_rate_per_hr != null ? `$${ov.feed_rate_per_hr}/hr` : '(global)'}</TableCell>
                       <TableCell sx={{ fontSize: '0.78rem' }}>{ov.cdn_rate_per_gb  != null ? `$${ov.cdn_rate_per_gb}/GB`  : '(global)'}</TableCell>
                       <TableCell align="right">
-                        <IconButton size="small" onClick={() => removeOverride(cid)} sx={{ color: TP.muted, '&:hover': { color: TP.danger } }}>
+                        <IconButton size="small" onClick={() => removeOverride(cid)} sx={{ color: AP.muted, '&:hover': { color: AP.danger } }}>
                           <DeleteIcon sx={{ fontSize: 15 }} />
                         </IconButton>
                       </TableCell>
@@ -935,7 +824,7 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
             <Button
               variant="outlined" size="small" startIcon={<AddIcon />}
               onClick={addOverride} disabled={!newOverride.channel_id}
-              sx={{ borderColor: TP.accentBdr, color: TP.accent, '&:hover': { borderColor: TP.accent } }}
+              sx={{ borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent } }}
             >
               Add
             </Button>
@@ -946,7 +835,7 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
               <Button
                 variant="contained" size="small" startIcon={<SaveIcon />}
                 onClick={saveRates} disabled={savingRates}
-                sx={{ bgcolor: TP.accent, '&:hover': { bgcolor: TP.accentHov } }}
+                sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}
               >
                 {savingRates ? 'Saving…' : 'Save Overrides'}
               </Button>
@@ -954,109 +843,6 @@ function PricingTab({ pricing, token, onRefresh, showSnack }) {
           )}
         </Box>
       </Paper>
-    </Box>
-  )
-}
-
-// ─── Dashboard ────────────────────────────────────────────────────────────────
-
-function TdDashboard({ token, onLogout }) {
-  const [activeTab,    setActiveTab]    = useState('overview')
-  const [cdnRecords,   setCdnRecords]   = useState([])
-  const [pricing,      setPricing]      = useState(null)
-  const [tournaments,  setTournaments]  = useState([])
-  const [channels,     setChannels]     = useState([])
-  const [loading,      setLoading]      = useState(true)
-  const [snack,        setSnack]        = useState({ open: false, message: '', severity: 'success' })
-
-  const showSnack = (message, severity = 'success') => setSnack({ open: true, message, severity })
-
-  const fetchAll = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [cRes, pRes, tRes, chRes] = await Promise.all([
-        fetch('/api/cdn-records'),
-        fetch('/api/pricing'),
-        fetch('/api/tournaments'),
-        fetch('/api/channels', { headers: { Authorization: `Bearer ${token}` } }),
-      ])
-      if (cRes.ok)  setCdnRecords(await cRes.json())
-      if (pRes.ok)  setPricing(await pRes.json())
-      if (tRes.ok)  setTournaments(await tRes.json())
-      if (chRes.ok) { const d = await chRes.json(); setChannels(d.channels || []) }
-    } finally {
-      setLoading(false)
-    }
-  }, [token])
-
-  useEffect(() => { fetchAll() }, [fetchAll])
-
-  return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      <AppBar position="sticky" elevation={0}
-        sx={{ bgcolor: TP.paper, borderBottom: `2px solid ${TP.accent}` }}>
-        <Toolbar sx={{ gap: 1.5 }}>
-          <BuildIcon sx={{ color: TP.accent, fontSize: 22 }} />
-          <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.08em', fontSize: '1.1rem', flexGrow: 1 }}>
-            TD ADMIN
-          </Typography>
-          <Chip label="TRILOGY DIGITAL" size="small"
-            sx={{ bgcolor: TP.accentDim, color: TP.accent, border: `1px solid ${TP.accentBdr}`, fontSize: '0.65rem', letterSpacing: '0.08em' }} />
-          <Tooltip title="Logout">
-            <IconButton size="small" onClick={onLogout} sx={{ color: TP.muted, '&:hover': { color: '#fff' } }}>
-              <LogoutIcon sx={{ fontSize: 18 }} />
-            </IconButton>
-          </Tooltip>
-        </Toolbar>
-      </AppBar>
-
-      {/* Tabs */}
-      <Box sx={{ bgcolor: TP.paper, borderBottom: `1px solid ${TP.border}` }}>
-        <Box sx={{ maxWidth: 1200, mx: 'auto', px: { xs: 2, md: 3 } }}>
-          <Tabs
-            value={activeTab}
-            onChange={(_, v) => setActiveTab(v)}
-            textColor="inherit"
-            TabIndicatorProps={{ style: { backgroundColor: TP.accent, height: 3 } }}
-            sx={{
-              minHeight: 44,
-              '& .MuiTab-root': { minHeight: 44, color: TP.muted },
-              '& .Mui-selected': { color: TP.accent },
-            }}
-          >
-            <Tab value="overview" label="Overview"    icon={<BarChartIcon sx={{ fontSize: 15 }} />} iconPosition="start" />
-            <Tab value="records"  label="CDN Records" icon={<CloudIcon     sx={{ fontSize: 15 }} />} iconPosition="start" />
-            <Tab value="pricing"  label="Pricing"     icon={<TuneIcon      sx={{ fontSize: 15 }} />} iconPosition="start" />
-          </Tabs>
-        </Box>
-      </Box>
-
-      <Box sx={{ maxWidth: 1200, mx: 'auto', px: { xs: 2, md: 3 }, py: 3 }}>
-        {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-            <CircularProgress sx={{ color: TP.accent }} />
-          </Box>
-        ) : activeTab === 'overview' ? (
-          <OverviewTab records={cdnRecords} pricing={pricing} tournaments={tournaments} />
-        ) : activeTab === 'records' ? (
-          <CdnRecordsTab
-            records={cdnRecords}
-            tournaments={tournaments}
-            pricing={pricing}
-            channels={channels}
-            token={token}
-            onRefresh={fetchAll}
-            showSnack={showSnack}
-          />
-        ) : (
-          <PricingTab
-            pricing={pricing}
-            token={token}
-            onRefresh={fetchAll}
-            showSnack={showSnack}
-          />
-        )}
-      </Box>
 
       <Snackbar
         open={snack.open}
@@ -1069,106 +855,5 @@ function TdDashboard({ token, onLogout }) {
         </Alert>
       </Snackbar>
     </Box>
-  )
-}
-
-// ─── Login screen ─────────────────────────────────────────────────────────────
-
-function TdLoginScreen({ onLogin }) {
-  const [password, setPassword] = useState('')
-  const [loading,  setLoading]  = useState(false)
-  const [error,    setError]    = useState('')
-
-  async function handleLogin(e) {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-    try {
-      const res = await fetch('/api/td-auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Login failed')
-      onLogin(data.token)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <Box sx={{
-      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      bgcolor: TP.bg, backgroundImage: 'radial-gradient(ellipse at 50% 0%, rgba(14,165,233,0.08) 0%, transparent 60%)',
-    }}>
-      <Paper elevation={0} sx={{ width: '100%', maxWidth: 360, p: 4, border: `1px solid ${TP.border}` }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-          <BuildIcon sx={{ color: TP.accent, fontSize: 28 }} />
-          <Box>
-            <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.08em', fontSize: '1.2rem', lineHeight: 1 }}>
-              TD ADMIN
-            </Typography>
-            <Typography variant="caption" sx={{ color: TP.muted, fontSize: '0.65rem' }}>
-              TRILOGY DIGITAL · INTERNAL USE ONLY
-            </Typography>
-          </Box>
-        </Box>
-
-        {error && <Alert severity="error" sx={{ mb: 2, fontSize: '0.8rem' }}>{error}</Alert>}
-
-        <Box component="form" onSubmit={handleLogin} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <TextField
-            label="Password"
-            type="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            fullWidth
-            size="small"
-            autoFocus
-          />
-          <Button
-            type="submit"
-            variant="contained"
-            fullWidth
-            disabled={!password || loading}
-            sx={{ bgcolor: TP.accent, '&:hover': { bgcolor: TP.accentHov }, fontWeight: 700 }}
-          >
-            {loading ? <CircularProgress size={18} sx={{ color: '#fff' }} /> : 'Sign In'}
-          </Button>
-        </Box>
-      </Paper>
-    </Box>
-  )
-}
-
-// ─── Root ─────────────────────────────────────────────────────────────────────
-
-const TD_SESSION_KEY = 'ri_td_admin_token'
-
-export default function TdAdmin() {
-  const [token, setToken] = useState(() => sessionStorage.getItem(TD_SESSION_KEY) || '')
-
-  function handleLogin(t) {
-    sessionStorage.setItem(TD_SESSION_KEY, t)
-    setToken(t)
-  }
-
-  function handleLogout() {
-    sessionStorage.removeItem(TD_SESSION_KEY)
-    setToken('')
-  }
-
-  return (
-    <ThemeProvider theme={tdTheme}>
-      <CssBaseline />
-      {token ? (
-        <TdDashboard token={token} onLogout={handleLogout} />
-      ) : (
-        <TdLoginScreen onLogin={handleLogin} />
-      )}
-    </ThemeProvider>
   )
 }

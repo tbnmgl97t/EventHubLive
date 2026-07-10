@@ -1,83 +1,103 @@
+import { createHmac, timingSafeEqual } from 'crypto'
+import { verifyToken } from './auth.js'
+import { supabase } from './supabase.js'
+
+const OAUTH_TICKET_TTL_MS = 2 * 60 * 1000 // 2 minutes — just long enough to cover the redirect
+
 /**
- * Shared helpers for reading / writing the `tenant` Edge Config key.
+ * Resolves the caller's identity plus their role within the tenant named by
+ * the X-Tenant-Id request header. Super Admins are treated as 'admin' in any
+ * tenant they act as (they're not members of tenant_members rows).
  *
- * Tenant config shape:
- * {
- *   id: string,
- *   title: string,
- *   subtitle: string,
- *   logo_url: string,
- *   colors: { primary, secondary, background, paper },
- *   components: {
- *     video_player, camera_selector, event_schedule,
- *     command_center, pre_show_screen
- *   }
- * }
+ * Returns null if the bearer token itself is invalid/missing. Otherwise
+ * returns { id, email, isSuperAdmin, tenantId, tenantRole } — tenantRole is
+ * null if the header is missing or the caller isn't a member of that tenant;
+ * callers must check for that before proceeding.
  */
+export async function resolveTenantSession(req) {
+  const session = await verifyToken(req.headers.authorization)
+  if (!session) return null
 
-const EC_ID        = process.env.EDGE_CONFIG_ID
-const VERCEL_TOKEN = process.env.VERCEL_API_TOKEN
+  const tenantId = req.headers['x-tenant-id'] || null
+  if (!tenantId) return { ...session, tenantId: null, tenantRole: null }
 
-export const DEFAULT_TENANT = {
-  id:       'eventhub-live',
-  title:    'EventHub Live',
-  subtitle: 'Live Event Streaming Platform',
-  logo_url: '',
-  timezone: 'ET',
-  colors: {
-    primary:    '#e65d2c',
-    secondary:  '#0a205a',
-    background: '#060e24',
-    paper:      '#0d1e42',
-  },
-  components: {
-    video_player:    true,
-    camera_selector: true,
-    event_schedule:  true,
-    command_center:  true,
-    pre_show_screen: true,
-  },
+  if (session.isSuperAdmin) {
+    return { ...session, tenantId, tenantRole: 'admin' }
+  }
+
+  const { data: member } = await supabase
+    .from('tenant_members')
+    .select('role')
+    .eq('tenant_id', tenantId)
+    .eq('user_id', session.id)
+    .single()
+
+  return { ...session, tenantId, tenantRole: member?.role || null }
 }
 
-export async function readTenant() {
-  if (!EC_ID || !VERCEL_TOKEN) return { ...DEFAULT_TENANT }
+/**
+ * Mints a short-lived signed ticket carrying a resolved tenant session.
+ *
+ * Full-page browser navigations (plain <a href>) can't attach an
+ * Authorization or X-Tenant-Id header, so endpoints that must be reached via
+ * navigation (e.g. the OAuth kickoff redirects) accept this ticket as a
+ * `?ticket=` query param instead. The frontend mints it up front with an
+ * authenticated fetch (which *can* send those headers), then navigates with
+ * the ticket attached.
+ */
+export function mintOAuthTicket(session) {
+  const payload = Buffer.from(JSON.stringify({
+    id: session.id,
+    isSuperAdmin: !!session.isSuperAdmin,
+    tenantId: session.tenantId,
+    tenantRole: session.tenantRole,
+    exp: OAUTH_TICKET_TTL_MS, // relative to iat, filled in below
+    iat: Date.now(),
+  })).toString('base64url')
+  const signature = createHmac('sha256', process.env.ADMIN_SECRET || 'fallback')
+    .update(payload)
+    .digest('hex')
+  return `${payload}.${signature}`
+}
+
+/** Verifies and decodes an OAuth ticket minted by mintOAuthTicket. Returns a session-shaped object, or null if missing/invalid/expired. */
+export function resolveTicketSession(ticket) {
+  if (!ticket || typeof ticket !== 'string') return null
+
+  const dotIndex = ticket.lastIndexOf('.')
+  if (dotIndex === -1) return null
+  const payload   = ticket.slice(0, dotIndex)
+  const signature = ticket.slice(dotIndex + 1)
+
+  const expected = createHmac('sha256', process.env.ADMIN_SECRET || 'fallback')
+    .update(payload)
+    .digest('hex')
+  const sigBuf = Buffer.from(signature, 'hex')
+  const expBuf = Buffer.from(expected, 'hex')
+  if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) return null
+
   try {
-    const res = await fetch(
-      `https://api.vercel.com/v1/edge-config/${EC_ID}/item/tenant`,
-      { headers: { Authorization: `Bearer ${VERCEL_TOKEN}` } }
-    )
-    if (res.ok) {
-      const item = await res.json()
-      if (item?.value) {
-        // Deep-merge colors and components so partial configs still work
-        return {
-          ...DEFAULT_TENANT,
-          ...item.value,
-          colors:     { ...DEFAULT_TENANT.colors,     ...(item.value.colors     || {}) },
-          components: { ...DEFAULT_TENANT.components, ...(item.value.components || {}) },
-        }
-      }
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (!decoded?.tenantId || !decoded?.iat || !decoded?.exp) return null
+    if (Date.now() > decoded.iat + decoded.exp) return null
+    return {
+      id: decoded.id,
+      isSuperAdmin: decoded.isSuperAdmin,
+      tenantId: decoded.tenantId,
+      tenantRole: decoded.tenantRole,
     }
-    // First run — seed defaults so admin can edit them
-    writeTenant(DEFAULT_TENANT).catch(err => console.error('[tenant] seed failed:', err.message))
-    return { ...DEFAULT_TENANT }
-  } catch (err) {
-    console.error('[tenant] read error:', err.message)
-    return { ...DEFAULT_TENANT }
+  } catch {
+    return null
   }
 }
 
-export async function writeTenant(tenant) {
-  const res = await fetch(
-    `https://api.vercel.com/v1/edge-config/${EC_ID}/items`,
-    {
-      method:  'PATCH',
-      headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ items: [{ operation: 'upsert', key: 'tenant', value: tenant }] }),
-    }
-  )
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Write failed: ${res.status} — ${text}`)
-  }
+/** Fetches a tenant's JW Player credentials, or null if not configured yet. */
+export async function getTenantJwCreds(tenantId) {
+  const { data } = await supabase
+    .from('tenants')
+    .select('jw_site_id, jw_api_secret')
+    .eq('id', tenantId)
+    .single()
+  if (!data?.jw_site_id || !data?.jw_api_secret) return null
+  return { siteId: data.jw_site_id, apiSecret: data.jw_api_secret }
 }

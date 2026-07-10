@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
+import EHLLogo from './EHLLogo'
+import EncoderControl from './EncoderControl'
+import { CdnRecordsPanel, PricingPanel } from './CostsExtras'
 import {
   Box, Paper, Typography, TextField, Button, CircularProgress,
   Alert, IconButton, Chip, Divider, Tooltip, Snackbar, Collapse,
@@ -33,9 +37,14 @@ import DownloadIcon from '@mui/icons-material/Download'
 import LinkIcon from '@mui/icons-material/Link'
 import VpnKeyIcon from '@mui/icons-material/VpnKey'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import ImageIcon from '@mui/icons-material/Image'
+import RouterIcon from '@mui/icons-material/Router'
 import { useTenant } from '../contexts/TenantContext'
+import { supabase } from '../lib/supabaseClient'
 
-const SESSION_KEY = 'ri_admin_token'
+const SESSION_KEY       = 'ri_admin_token'
+const ACTIVE_TENANT_KEY = 'ri_active_tenant'
+const ROLE_KEY          = 'ri_admin_role'
 
 /** Normalise legacy camera1/camera2 fields into a streams array */
 function getSessionStreams(session) {
@@ -94,6 +103,22 @@ const adminTheme = createTheme({
   },
 })
 
+// ─── VOD expiry ───────────────────────────────────────────────────────────────
+// JW Live-to-VOD recordings are auto-deleted from JW after this many days.
+const VOD_TTL_DAYS = 10
+
+/** Returns the computed UTC ms when a channel's VOD recording expires (stream_end + TTL). */
+function vodExpiresAt(ch) {
+  if (!ch?.stream_end) return null
+  return new Date(ch.stream_end).getTime() + VOD_TTL_DAYS * 86_400_000
+}
+
+/** True if the channel is a past downloadable stream whose VOD has expired. */
+function isVodExpired(ch) {
+  const exp = vodExpiresAt(ch)
+  return exp !== null && exp < Date.now()
+}
+
 // ─── JW Player lib ────────────────────────────────────────────────────────────
 
 const JW_PLAYER_LIB = 'https://cdn.jwplayer.com/libraries/xJKVL03e.js'
@@ -118,8 +143,12 @@ function loadJWScript() {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function authHeader(token) {
-  return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+function authHeader(token, tenantId) {
+  return {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    ...(tenantId ? { 'X-Tenant-Id': tenantId } : {}),
+  }
 }
 
 function formatDate(dateStr) {
@@ -151,14 +180,32 @@ function getTournamentDateRange(tournament) {
 
 const SPINUP_MINS = 30
 
+// JW uses 'idle' for both pre-start and post-end — use time to tell them apart
+function resolveIdleStatus(ch) {
+  if (!ch.stream_start) return 'past'
+  const now   = Date.now()
+  const start = new Date(ch.stream_start).getTime()
+  const end   = ch.stream_end ? new Date(ch.stream_end).getTime() : null
+  if (start > now) return 'upcoming'          // hasn't started yet
+  if (end && now < end) return 'upcoming'     // currently within window
+  return 'past'
+}
+
 function getSpinupStatus(ch) {
   if (!ch.stream_start) return null
+  const s = ch.status?.toLowerCase()
+  // Terminal / in-progress states never get a spinup overlay
+  if (['active', 'streaming', 'stopping', 'destroying', 'deleting', 'idle'].includes(s)) return null
+  // For unknown statuses only show spinup badge if the stream is upcoming
+  if (!['requested', 'scheduled', 'creating'].includes(s)) {
+    if (resolveIdleStatus(ch) !== 'upcoming') return null
+  }
   const now   = Date.now()
   const start = new Date(ch.stream_start).getTime()
   const end   = ch.stream_end ? new Date(ch.stream_end).getTime() : null
   const minsToStart   = (start - now) / 60_000
   const minsAfterEnd  = end ? (now - end) / 60_000 : null
-  if (minsToStart > 0 && minsToStart <= SPINUP_MINS)                       return 'starting_soon'
+  if (minsToStart > 0 && minsToStart <= SPINUP_MINS)                             return 'starting_soon'
   if (minsAfterEnd !== null && minsAfterEnd >= 0 && minsAfterEnd <= SPINUP_MINS) return 'winding_down'
   return null
 }
@@ -187,13 +234,13 @@ function fmtUSD(n) {
 }
 
 // Group a list of channels into { dateLabel → { hours, storage, ingestion, playout, total, count } }
-function calcDailyCosts(channels) {
+function calcDailyCosts(channels, tz = 'America/New_York') {
   const map = {}
   channels.forEach(ch => {
     const cost = calcChannelCost(ch)
     if (!cost || !ch.stream_start) return
     const dateLabel = new Date(ch.stream_start).toLocaleDateString('en-US', {
-      weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York',
+      weekday: 'short', month: 'short', day: 'numeric', timeZone: tz,
     })
     if (!map[dateLabel]) map[dateLabel] = { hours: 0, storage: 0, ingestion: 0, playout: 0, total: 0, count: 0 }
     const d = map[dateLabel]
@@ -277,7 +324,8 @@ function CostRecordDialog({ open, initial, onClose, onSave }) {
 
 // ─── Login ────────────────────────────────────────────────────────────────────
 
-function LoginScreen({ onLogin }) {
+function LoginScreen() {
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -287,18 +335,12 @@ function LoginScreen({ onLogin }) {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch('/api/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Login failed')
-      sessionStorage.setItem(SESSION_KEY, data.token)
-      onLogin(data.token)
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+      if (signInError) throw new Error(signInError.message)
+      // On success the root Admin component's onAuthStateChange listener picks
+      // this up and swaps the view — nothing further to do here.
     } catch (err) {
       setError(err.message)
-    } finally {
       setLoading(false)
     }
   }
@@ -311,33 +353,9 @@ function LoginScreen({ onLogin }) {
         component="form"
         onSubmit={handleSubmit}
       >
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 3, gap: 1.5 }}>
-          {/* Logo B — broadcast rings + play mark */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-            <svg width="48" height="48" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="22" cy="22" r="18" stroke="rgba(99,102,241,0.25)" strokeWidth="1.5"/>
-              <circle cx="22" cy="22" r="12" stroke="rgba(99,102,241,0.45)" strokeWidth="1.5"/>
-              <path d="M18 15.5l11 6.5-11 6.5V15.5z" fill="#6366f1"/>
-            </svg>
-            <Box sx={{ lineHeight: 1 }}>
-              <Box sx={{ fontFamily: "'Poppins', sans-serif", fontWeight: 900, fontSize: '1.4rem', letterSpacing: '-0.02em', color: '#fff', lineHeight: 1 }}>
-                Event<Box component="span" sx={{ color: AP.accent }}>Hub</Box>
-                <Box component="span" sx={{
-                  display: 'inline-flex', alignItems: 'center', gap: '3px',
-                  bgcolor: '#ef4444', borderRadius: '4px', px: '5px', py: '1px',
-                  fontSize: '0.5rem', fontWeight: 800, letterSpacing: '0.1em',
-                  verticalAlign: 'middle', ml: '6px', position: 'relative', top: '-2px',
-                }}>
-                  <Box component="span" sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#fff', flexShrink: 0,
-                    '@keyframes pulse': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.4 } },
-                    animation: 'pulse 1.4s ease-in-out infinite',
-                  }}/>
-                  LIVE
-                </Box>
-              </Box>
-            </Box>
-          </Box>
-          <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.08em', fontSize: '1.05rem', color: '#e2e8f0' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 3, gap: 1 }}>
+          <EHLLogo size={36} dark animate />
+          <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.08em', fontSize: '0.9rem', color: 'rgba(255,255,255,0.35)', mt: 0.5 }}>
             ADMIN DASHBOARD
           </Typography>
         </Box>
@@ -346,23 +364,66 @@ function LoginScreen({ onLogin }) {
 
         <TextField
           fullWidth
+          type="email"
+          label="Email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          size="small"
+          autoFocus
+          sx={{ mb: 2 }}
+        />
+        <TextField
+          fullWidth
           type="password"
           label="Password"
           value={password}
           onChange={e => setPassword(e.target.value)}
           size="small"
-          autoFocus
           sx={{ mb: 2 }}
         />
         <Button
           type="submit"
           fullWidth
           variant="contained"
-          disabled={loading || !password}
+          disabled={loading || !email || !password}
           sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov }, fontWeight: 700 }}
         >
           {loading ? <CircularProgress size={18} sx={{ color: '#fff' }} /> : 'Sign In'}
         </Button>
+      </Paper>
+    </Box>
+  )
+}
+
+function TenantPicker({ tenants, onSelect, onLogout }) {
+  if (tenants.length === 0) {
+    return (
+      <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+        <Typography sx={{ color: '#94a3b8', fontSize: '0.9rem' }}>Your account isn't a member of any organization yet.</Typography>
+        <Button onClick={onLogout} sx={{ color: '#a8bcd4' }}>Log Out</Button>
+      </Box>
+    )
+  }
+  return (
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <Paper elevation={0} sx={{ width: 360, p: 4, border: '1px solid rgba(255,255,255,0.09)', borderRadius: 2 }}>
+        <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem', color: '#fff', mb: 2 }}>
+          CHOOSE AN ORGANIZATION
+        </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {tenants.map(t => (
+            <Button
+              key={t.id}
+              onClick={() => onSelect(t)}
+              variant="outlined"
+              fullWidth
+              sx={{ justifyContent: 'flex-start', color: '#e2e8f0', borderColor: 'rgba(255,255,255,0.14)', textTransform: 'none' }}
+            >
+              {t.name}
+            </Button>
+          ))}
+        </Box>
+        <Button onClick={onLogout} size="small" sx={{ mt: 2, color: '#64748b' }}>Log Out</Button>
       </Paper>
     </Box>
   )
@@ -399,7 +460,8 @@ const EMPTY_DRAFT_SESSION = () => ({
 
 function EventDrawer({ open, initial, onClose, onSave }) {
   const { tenant }    = useTenant()
-  const tz            = tenant?.timezone || 'ET'
+  const TZ            = tenant?.timezone || 'America/New_York'
+  const tz            = getTzLabel(TZ)   // abbreviated label for display
   const [form,        setForm]        = useState(EMPTY_TOURNAMENT)
   const [sessions,    setSessions]    = useState([])
   const [expandedIdx, setExpandedIdx] = useState(null)
@@ -454,7 +516,7 @@ function EventDrawer({ open, initial, onClose, onSave }) {
   async function handleSave() {
     setSaving(true)
     try {
-      await onSave({ ...form, sessions: sessions.map(s => ({ ...s, tz })) })
+      await onSave({ ...form, sessions: sessions.map(s => ({ ...s, tz: TZ })) })
       onClose()
     } finally {
       setSaving(false)
@@ -614,7 +676,8 @@ const EMPTY_DAY = { label: '', date: '', start_time: '8:00 AM', end_time: '5:00 
 
 function SessionDrawer({ open, initial, tournament, channels, onClose, onSaved, onOpenPicker }) {
   const { tenant } = useTenant()
-  const tz         = tenant?.timezone || 'ET'
+  const TZ         = tenant?.timezone || 'America/New_York'
+  const tz         = getTzLabel(TZ)   // abbreviated label for display
   const [form, setForm] = useState(EMPTY_DAY)
   const [streams, setStreams] = useState([])
   const [saving, setSaving] = useState(false)
@@ -646,7 +709,7 @@ function SessionDrawer({ open, initial, tournament, channels, onClose, onSaved, 
   async function handleSave() {
     setSaving(true)
     try {
-      await onSaved({ ...form, tz, streams })
+      await onSaved({ ...form, tz: TZ, streams })
       onClose()
     } finally {
       setSaving(false)
@@ -781,7 +844,7 @@ function ChannelPickerDialog({ open, slot, day, channels, onClose, onPick }) {
 
         {channels.length === 0 ? (
           <Typography variant="body2" sx={{ color: '#a8bcd4', textAlign: 'center', py: 3 }}>
-            No JW live channels found.
+            No live channels found.
           </Typography>
         ) : (
           <Stack spacing={1} sx={{ mt: 1 }}>
@@ -796,7 +859,7 @@ function ChannelPickerDialog({ open, slot, day, channels, onClose, onPick }) {
               <Typography variant="body2" sx={{ color: 'rgba(168,188,212,0.6)', fontStyle: 'italic' }}>— Clear assignment —</Typography>
             </Paper>
             {[...channels].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(ch => {
-              const isLive   = ch.status === 'active'
+              const isLive   = ch.status === 'active' || ch.status === 'streaming'
               const isActive = ch.stream_url === currentUrl && !!currentUrl
               const STATUS_LABELS = { requested: 'Scheduled', scheduled: 'Scheduled', creating: 'Creating', active: 'Live', idle: 'Idle', stopping: 'Stopping', destroying: 'Destroying' }
               const statusLabel = STATUS_LABELS[ch.status?.toLowerCase()] || ch.status || 'Idle'
@@ -849,14 +912,21 @@ function ChannelPickerDialog({ open, slot, day, channels, onClose, onPick }) {
   )
 }
 
-// ─── Helpers for Eastern ↔ UTC conversion ────────────────────────────────────
+// ─── Timezone helpers ────────────────────────────────────────────────────────
 
-function isEDT(dateStr) {
-  const month = parseInt(dateStr.split('-')[1], 10)
-  return month >= 3 && month <= 11
+/** Return the generic abbreviated timezone label for an IANA timezone name (e.g. 'America/New_York' → 'ET', 'America/Chicago' → 'CT') */
+function getTzLabel(tz) {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortGeneric' })
+      .formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || tz
+  } catch { return tz }
 }
 
-function toUtcIso(dateStr, timeStr) {
+/**
+ * Convert a local date + time string (in the given IANA timezone) to a UTC ISO string.
+ * Uses the Intl DST-aware offset trick — works for any IANA timezone, no manual offset math.
+ */
+function toUtcIso(dateStr, timeStr, tz = 'America/New_York') {
   if (!dateStr || !timeStr) return null
   const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i)
   if (!match) return null
@@ -867,12 +937,20 @@ function toUtcIso(dateStr, timeStr) {
   if (ampm === 'AM' && h === 12) h = 0
   const hh = String(h).padStart(2, '0')
   const mm = String(m).padStart(2, '0')
-  const offset = isEDT(dateStr) ? '-04:00' : '-05:00'
   try {
-    return new Date(`${dateStr}T${hh}:${mm}:00${offset}`).toISOString()
-  } catch {
-    return null
-  }
+    // Treat the date+time as if it were UTC to get a reference ms value
+    const naiveMs = Date.parse(`${dateStr}T${hh}:${mm}:00Z`)
+    // Format that reference in the target timezone to find what local time it corresponds to
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).formatToParts(new Date(naiveMs))
+    const f = {}
+    for (const p of parts) f[p.type] = parseInt(p.value, 10)
+    const tzMs = Date.UTC(f.year, f.month - 1, f.day, f.hour === 24 ? 0 : f.hour, f.minute, f.second)
+    // Offset = difference; apply it to naiveMs to get the real UTC time
+    return new Date(naiveMs + (naiveMs - tzMs)).toISOString()
+  } catch { return null }
 }
 
 // ─── Create Live Stream drawer ───────────────────────────────────────────────
@@ -882,7 +960,8 @@ const INGEST_FORMATS = [
   { value: 'rtmps',    label: 'RTMPS' },
   { value: 'srt',      label: 'SRT (Push)' },
   { value: 'srt_pull', label: 'SRT (Pull)' },
-  { value: 'hls',      label: 'HLS Push' },
+  { value: 'hls',      label: 'HLS (Push)' },
+  { value: 'hls_pull', label: 'HLS (Pull)' },
   { value: 'rtp',      label: 'RTP' },
   { value: 'rtp_fec',  label: 'RTP + FEC' },
 ]
@@ -892,20 +971,91 @@ const REGIONS = [
   { value: 'eu-west-1', label: 'EU West (eu-west-1)' },
 ]
 
-// Compute ET date ("YYYY-MM-DD") and time ("HH:MM") for a given Date object
-function etDateVal(d) { return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) }
-function etTimeVal(d) { return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' }) }
-function defaultStreamTimes() {
+// Compute date ("YYYY-MM-DD") and time ("HH:MM") for a given Date in a specific timezone
+function tzDateVal(d, tz = 'America/New_York') { return d.toLocaleDateString('en-CA', { timeZone: tz }) }
+function tzTimeVal(d, tz = 'America/New_York') { return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz }) }
+function defaultStreamTimes(tz = 'America/New_York') {
   const start = new Date(Date.now() + 20 * 60 * 1000)
   const end   = new Date(start.getTime() + 60 * 60 * 1000)
-  return { startDate: etDateVal(start), startTime: etTimeVal(start), endDate: etDateVal(end), endTime: etTimeVal(end) }
+  return { startDate: tzDateVal(start, tz), startTime: tzTimeVal(start, tz), endDate: tzDateVal(end, tz), endTime: tzTimeVal(end, tz) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stream Detail Drawer — shows full info when a row is clicked in the list
 // ─────────────────────────────────────────────────────────────────────────────
-function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview }) {
-  const [copied, setCopied] = useState(null)
+function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview, token, tenantId, readOnly }) {
+  const { tenant }       = useTenant()
+  const TZ               = tenant?.timezone || 'America/New_York'
+  const tzLabel          = getTzLabel(TZ)
+  const [copied,         setCopied]         = useState(null)
+  const [renditionUrl,   setRenditionUrl]   = useState(null)   // MP4 download URL
+  const [renditionState, setRenditionState] = useState('idle') // idle | loading | ready | not_ready | expired | error
+  const [downloading,    setDownloading]    = useState(false)
+  const [dlProgress,     setDlProgress]     = useState(0)   // 0–100
+
+  const s = ch?.status?.toLowerCase()
+  const isPast = !!ch && (
+    s === 'destroying' || s === 'stopping' ||
+    ((s === 'idle' || !['requested','scheduled','creating','active','streaming'].includes(s)) &&
+      resolveIdleStatus(ch) === 'past')
+  )
+
+  // Fetch rendition when drawer opens on a past downloadable stream
+  // If asset is expired (vod_expires_at in past) or fetch returns 404, auto-delete from JW
+  useEffect(() => {
+    if (!open || !ch?.enable_live_to_vod || !isPast) {
+      setRenditionUrl(null)
+      setRenditionState('idle')
+      return
+    }
+
+    // VOD has expired (stream_end + VOD_TTL_DAYS) — show expired state and
+    // clean up the JW media asset if we have an ID for it.
+    if (isVodExpired(ch)) {
+      if (ch.vod_media_id) {
+        fetch('/api/delete-vod-media', {
+          method: 'DELETE',
+          headers: authHeader(token, tenantId),
+          body: JSON.stringify({ media_id: ch.vod_media_id }),
+        }).catch(err => console.error('[auto-delete expired VOD]', err))
+      }
+      setRenditionState('expired')
+      return
+    }
+
+    let cancelled = false
+    setRenditionState('loading')
+    fetch(`/api/media-renditions?id=${ch.id}`, {
+      headers: authHeader(token, tenantId),
+    })
+      .then(async r => {
+        if (cancelled) return
+        if (r.status === 404) {
+          // VOD media no longer exists in JW — clean it up but keep the channel row
+          if (ch.vod_media_id) {
+            fetch('/api/delete-vod-media', {
+              method: 'DELETE',
+              headers: authHeader(token, tenantId),
+              body: JSON.stringify({ media_id: ch.vod_media_id }),
+            }).catch(err => console.error('[auto-delete missing VOD]', err))
+          }
+          if (!cancelled) setRenditionState('expired')
+          return
+        }
+        return r.json()
+      })
+      .then(data => {
+        if (cancelled || !data) return
+        if (data.url) {
+          setRenditionUrl(data.url)
+          setRenditionState('ready')
+        } else {
+          setRenditionState('not_ready')
+        }
+      })
+      .catch(() => { if (!cancelled) setRenditionState('error') })
+    return () => { cancelled = true }
+  }, [open, ch?.id, ch?.enable_live_to_vod, ch?.stream_end, isPast, token])
 
   if (!ch) return null
 
@@ -915,23 +1065,64 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview })
     setTimeout(() => setCopied(null), 1800)
   }
 
+  async function handleDownload() {
+    if (!renditionUrl || downloading) return
+    setDownloading(true)
+    setDlProgress(0)
+    try {
+      const res    = await fetch(renditionUrl)
+      const total  = Number(res.headers.get('content-length') || 0)
+      const reader = res.body.getReader()
+      const chunks = []
+      let received = 0
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        chunks.push(value)
+        received += value.length
+        if (total) setDlProgress(Math.round((received / total) * 100))
+      }
+
+      const blob = new Blob(chunks, { type: 'video/mp4' })
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = `${ch.name || ch.id}.mp4`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Download failed:', err)
+    } finally {
+      setDownloading(false)
+      setDlProgress(0)
+    }
+  }
+
   const STATUS_CFG = {
-    active:     { label: 'Live',      bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
-    requested:  { label: 'Scheduled', bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
-    scheduled:  { label: 'Scheduled', bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
-    creating:   { label: 'Creating',  bg: 'rgba(245,158,11,0.15)',  color: '#f59e0b', border: 'rgba(245,158,11,0.4)'  },
-    idle:       { label: 'Past',      bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
-    stopping:   { label: 'Stopping',  bg: 'rgba(239,68,68,0.12)',   color: '#f87171', border: 'rgba(239,68,68,0.35)'  },
-    destroying: { label: 'Past',      bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
+    active:     { label: 'Live',        bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
+    streaming:  { label: 'Live',        bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
+    requested:  { label: 'Scheduled',   bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
+    scheduled:  { label: 'Scheduled',   bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
+    creating:   { label: 'Creating',    bg: 'rgba(245,158,11,0.15)',  color: '#f59e0b', border: 'rgba(245,158,11,0.4)'  },
+    starting:   { label: 'Starting',    bg: 'rgba(56,189,248,0.12)',  color: '#38bdf8', border: 'rgba(56,189,248,0.35)' },
+    ready:      { label: 'Ready',       bg: 'rgba(87,187,149,0.15)',  color: '#57BB95', border: 'rgba(87,187,149,0.4)'  },
+    idle:       { label: 'Past Event',   bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
+    stopping:   { label: 'Stopping',    bg: 'rgba(239,68,68,0.12)',   color: '#f87171', border: 'rgba(239,68,68,0.35)'  },
+    destroying: { label: 'Destroying',  bg: 'rgba(245,158,11,0.1)',   color: '#f59e0b', border: 'rgba(245,158,11,0.35)' },
+    deleting:   { label: 'Deleting',    bg: 'rgba(245,158,11,0.1)',   color: '#f59e0b', border: 'rgba(245,158,11,0.35)' },
   }
   const cfg = STATUS_CFG[ch.status?.toLowerCase()] || STATUS_CFG.idle
 
   const fmtTime = iso => iso
-    ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+    ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: TZ })
     : null
 
   const vodUrl   = ch.vod_media_id ? `https://cdn.jwplayer.com/videos/${ch.vod_media_id}-720p.mp4` : null
-  const vodDaysLeft = ch.vod_expires_at ? Math.max(0, Math.ceil((new Date(ch.vod_expires_at) - Date.now()) / 86_400_000)) : null
+  const _vodExp     = vodExpiresAt(ch)
+  const vodDaysLeft = _vodExp ? Math.max(0, Math.ceil((_vodExp - Date.now()) / 86_400_000)) : null
 
   const Row = ({ label, value, field, mono }) => (
     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, py: 0.6 }}>
@@ -951,8 +1142,8 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview })
     </Box>
   )
 
-  const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York' }) : null
-  const fmtTimeShort = iso => iso ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' }) : null
+  const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: TZ }) : null
+  const fmtTimeShort = iso => iso ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ }) : null
   const streamTypeLabel = ch.stream_type === '24/7' ? '24/7 Channel' : ch.stream_type === 'event' ? 'Live Event' : (ch.stream_type || '—')
 
   const CredCard = ({ label, value, field, icon: Icon }) => (
@@ -990,7 +1181,8 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview })
     creating:   { ...STATUS_CFG.creating,   glow: 'rgba(245,158,11,0.15)' },
     idle:       { ...STATUS_CFG.idle,       glow: 'rgba(100,116,139,0.08)'},
     stopping:   { ...STATUS_CFG.stopping,   glow: 'rgba(239,68,68,0.1)'   },
-    destroying: { ...STATUS_CFG.destroying, glow: 'rgba(100,116,139,0.08)'},
+    destroying: { ...STATUS_CFG.destroying, glow: 'rgba(245,158,11,0.08)' },
+    deleting:   { ...STATUS_CFG.deleting,   glow: 'rgba(245,158,11,0.08)' },
   }
   const cfgG = STATUS_CFG_GLOW[ch.status?.toLowerCase()] || STATUS_CFG_GLOW.idle
 
@@ -1029,16 +1221,42 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview })
             {streamTypeLabel}
           </Box>
           {ch.enable_live_to_vod && (
-            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 1.25, py: 0.45, borderRadius: '20px', fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', backgroundColor: AP.liveDim, color: AP.live, border: `1px solid ${AP.liveBdr}` }}>
-              <DownloadIcon sx={{ fontSize: 10 }} />
-              Downloadable
+            isVodExpired(ch) ? (
+              <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 1.25, py: 0.45, borderRadius: '20px', fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', backgroundColor: AP.slateDim, color: AP.muted, border: '1px solid rgba(100,116,139,0.25)' }}>
+                <DownloadIcon sx={{ fontSize: 10 }} />
+                Recording Expired
+              </Box>
+            ) : (
+              <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 1.25, py: 0.45, borderRadius: '20px', fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', backgroundColor: AP.liveDim, color: AP.live, border: `1px solid ${AP.liveBdr}` }}>
+                <DownloadIcon sx={{ fontSize: 10 }} />
+                Downloadable
+              </Box>
+            )
+          )}
+          {ch.youtube_broadcast_id && (
+            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 1.25, py: 0.45, borderRadius: '20px', fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', backgroundColor: 'rgba(255,0,0,0.12)', color: '#ff4444', border: '1px solid rgba(255,0,0,0.3)' }}>
+              <Box component="img"
+                src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"
+                sx={{ width: 10, height: 10 }}
+              />
+              YouTube
+            </Box>
+          )}
+          {ch.facebook_live_video_id && (
+            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 1.25, py: 0.45, borderRadius: '20px', fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', backgroundColor: 'rgba(24,119,242,0.12)', color: '#60a5fa', border: '1px solid rgba(24,119,242,0.3)' }}>
+              <Box sx={{ width: 10, height: 10, borderRadius: '2px', bgcolor: '#1877F2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Box component="svg" viewBox="0 0 24 24" sx={{ width: 6, height: 6, fill: '#fff' }}>
+                  <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
+                </Box>
+              </Box>
+              Facebook
             </Box>
           )}
           {ch.stream_start && (
             <Typography sx={{ fontSize: '0.68rem', color: AP.muted, ml: 0.25 }}>
               {fmtDate(ch.stream_start)}
               {ch.stream_end && <Box component="span" sx={{ color: 'rgba(255,255,255,0.25)', mx: 0.4 }}>·</Box>}
-              {fmtTimeShort(ch.stream_start)}{ch.stream_end ? ` – ${fmtTimeShort(ch.stream_end)}` : ''} ET
+              {fmtTimeShort(ch.stream_start)}{ch.stream_end ? ` – ${fmtTimeShort(ch.stream_end)}` : ''} {tzLabel}
             </Typography>
           )}
         </Box>
@@ -1055,66 +1273,206 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview })
         {/* Playback */}
         {ch.stream_url && (
           <Box>
-            <SectionLabel>Playback</SectionLabel>
+            <SectionLabel>CDN Playback</SectionLabel>
             <CredCard label="HLS URL" value={ch.stream_url} field="stream_url" icon={LinkIcon} />
           </Box>
         )}
 
-        {/* Ingest */}
-        {(ch.ingest_url || ch.ingest_key) && (
+        {/* YouTube */}
+        {ch.youtube_broadcast_id && (
           <Box>
-            <SectionLabel>Ingest</SectionLabel>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1.25 }}>
-              {ch.ingest_format && (() => {
-                const FORMAT_MAP = {
-                  rtmp:     { label: 'RTMP',     color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.3)'  },
-                  rtmps:    { label: 'RTMPS',    color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.3)'  },
-                  srt:      { label: 'SRT Push', color: '#38bdf8', bg: 'rgba(56,189,248,0.1)',  border: 'rgba(56,189,248,0.3)'  },
-                  srt_pull: { label: 'SRT Pull', color: '#38bdf8', bg: 'rgba(56,189,248,0.1)',  border: 'rgba(56,189,248,0.3)'  },
-                  hls:      { label: 'HLS',      color: '#a78bfa', bg: 'rgba(167,139,250,0.1)', border: 'rgba(167,139,250,0.3)' },
-                  rtp:      { label: 'RTP',      color: '#34d399', bg: 'rgba(52,211,153,0.1)',  border: 'rgba(52,211,153,0.3)'  },
-                  rtp_fec:  { label: 'RTP FEC',  color: '#34d399', bg: 'rgba(52,211,153,0.1)',  border: 'rgba(52,211,153,0.3)'  },
-                }
-                const fmt = FORMAT_MAP[ch.ingest_format] || { label: ch.ingest_format.toUpperCase(), color: AP.muted, bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.12)' }
-                return (
-                  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 1.25, py: 0.5, borderRadius: '20px', fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.07em', bgcolor: fmt.bg, color: fmt.color, border: `1px solid ${fmt.border}` }}>
-                    <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: fmt.color, flexShrink: 0 }} />
-                    {fmt.label}
-                  </Box>
-                )
-              })()}
-              {(ch.ingest_point_id || ch.ingest_point_name) && (
-                <Tooltip title={ch.ingest_point_id ? `ID: ${ch.ingest_point_id}` : ''}>
-                  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 1.25, py: 0.5, borderRadius: '20px', fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.07em', bgcolor: AP.accentDim, color: AP.accent, border: `1px solid ${AP.accentBdr}` }}>
-                    <VpnKeyIcon sx={{ fontSize: 10 }} />
-                    {ch.ingest_point_name || 'Predefined Ingest'}
-                  </Box>
-                </Tooltip>
-              )}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1 }}>
+              <Box component="img"
+                src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"
+                sx={{ width: 13, height: 13 }}
+              />
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.1em', color: AP.muted, textTransform: 'uppercase' }}>YouTube</Typography>
             </Box>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {ch.ingest_url && <CredCard label="Ingest URL" value={ch.ingest_url} field="ingest_url" icon={LinkIcon} />}
-              {ch.ingest_key && <CredCard label="Stream Key" value={ch.ingest_key} field="ingest_key" icon={VpnKeyIcon} />}
+            <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.25)', px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+              <CredCard
+                label="WATCH URL"
+                value={`https://www.youtube.com/watch?v=${ch.youtube_broadcast_id}`}
+                field="yt_watch"
+                icon={LinkIcon}
+              />
+              {ch.youtube_rtmp_url && (
+                <CredCard
+                  label="RTMP URL"
+                  value={ch.youtube_rtmp_url}
+                  field="yt_rtmp"
+                  icon={LinkIcon}
+                />
+              )}
+              {ch.youtube_stream_key && (
+                <CredCard
+                  label="STREAM KEY"
+                  value={ch.youtube_stream_key}
+                  field="yt_key"
+                  icon={VpnKeyIcon}
+                />
+              )}
             </Box>
           </Box>
         )}
+
+        {/* Facebook */}
+        {ch.facebook_live_video_id && (
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1 }}>
+              <Box sx={{ width: 13, height: 13, borderRadius: '3px', bgcolor: '#1877F2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Box component="svg" viewBox="0 0 24 24" sx={{ width: 8, height: 8, fill: '#fff' }}>
+                  <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
+                </Box>
+              </Box>
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.1em', color: AP.muted, textTransform: 'uppercase' }}>Facebook</Typography>
+            </Box>
+            <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.25)', px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+              {ch.facebook_watch_url && (
+                <CredCard label="WATCH URL"  value={ch.facebook_watch_url}  field="fb_watch" icon={LinkIcon}   />
+              )}
+              {ch.facebook_rtmp_url && (
+                <CredCard label="RTMP URL"   value={ch.facebook_rtmp_url}   field="fb_rtmp"  icon={LinkIcon}   />
+              )}
+              {ch.facebook_stream_key && (
+                <CredCard label="STREAM KEY" value={ch.facebook_stream_key} field="fb_key"   icon={VpnKeyIcon} />
+              )}
+            </Box>
+          </Box>
+        )}
+
+        {/* Ingest */}
+        {(ch.ingest_url || ch.ingest_key) && (() => {
+          const FORMAT_MAP = {
+            rtmp:     { label: 'RTMP',     color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.3)'  },
+            rtmps:    { label: 'RTMPS',    color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.3)'  },
+            srt:      { label: 'SRT Push', color: '#38bdf8', bg: 'rgba(56,189,248,0.1)',  border: 'rgba(56,189,248,0.3)'  },
+            srt_pull: { label: 'SRT Pull', color: '#38bdf8', bg: 'rgba(56,189,248,0.1)',  border: 'rgba(56,189,248,0.3)'  },
+            hls:      { label: 'HLS',      color: '#a78bfa', bg: 'rgba(167,139,250,0.1)', border: 'rgba(167,139,250,0.3)' },
+            hls_pull: { label: 'HLS Pull', color: '#a78bfa', bg: 'rgba(167,139,250,0.1)', border: 'rgba(167,139,250,0.3)' },
+            rtp:      { label: 'RTP',      color: '#34d399', bg: 'rgba(52,211,153,0.1)',  border: 'rgba(52,211,153,0.3)'  },
+            rtp_fec:  { label: 'RTP FEC',  color: '#34d399', bg: 'rgba(52,211,153,0.1)',  border: 'rgba(52,211,153,0.3)'  },
+          }
+          const fmt = ch.ingest_format
+            ? (FORMAT_MAP[ch.ingest_format] || { label: ch.ingest_format.toUpperCase(), color: AP.muted, bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.12)' })
+            : null
+          return (
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1 }}>
+                {fmt && (
+                  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 1.1, py: 0.35, borderRadius: '20px', fontSize: '0.63rem', fontWeight: 700, letterSpacing: '0.07em', bgcolor: fmt.bg, color: fmt.color, border: `1px solid ${fmt.border}` }}>
+                    <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: fmt.color, flexShrink: 0 }} />
+                    {fmt.label}
+                  </Box>
+                )}
+                <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.1em', color: AP.muted, textTransform: 'uppercase' }}>Ingest</Typography>
+              </Box>
+              <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.25)', px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+                {ch.ingest_point_name && (
+                  <CredCard label="INGEST POINT" value={ch.ingest_point_name} icon={LocationOnIcon} />
+                )}
+                {ch.ingest_url && (
+                  <CredCard label="INGEST URL" value={ch.ingest_url} field="ingest_url" icon={LinkIcon} />
+                )}
+                {ch.ingest_key && (
+                  <CredCard label="STREAM KEY" value={ch.ingest_key} field="ingest_key" icon={VpnKeyIcon} />
+                )}
+              </Box>
+            </Box>
+          )
+        })()}
 
         {/* VOD Recording */}
         {ch.enable_live_to_vod && (
           <Box>
             <SectionLabel>Recording</SectionLabel>
-            <Box sx={{ border: `1px solid ${AP.liveBdr}`, borderRadius: 2, bgcolor: AP.liveDim, px: 2, py: 1.5 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                  <DownloadIcon sx={{ fontSize: 14, color: AP.live }} />
-                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: AP.live }}>VOD Recording</Typography>
+            {!isPast ? (
+              /* Stream is live / scheduled / creating / stopping — recording not available yet */
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25, border: '1px solid rgba(99,102,241,0.25)', borderRadius: 2, bgcolor: 'rgba(99,102,241,0.07)', px: 2, py: 1.5 }}>
+                <DownloadIcon sx={{ fontSize: 15, color: '#818cf8', mt: '1px', flexShrink: 0 }} />
+                <Box>
+                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: '#818cf8', mb: 0.25 }}>Downloadable Recording</Typography>
+                  <Typography sx={{ fontSize: '0.68rem', color: AP.muted, lineHeight: 1.5 }}>
+                    This stream will be available to download after the event ends.
+                  </Typography>
                 </Box>
-                {vodDaysLeft !== null && <Typography sx={{ fontSize: '0.65rem', color: AP.muted }}>{vodDaysLeft}d remaining</Typography>}
               </Box>
-              <Typography sx={{ fontFamily: 'monospace', fontSize: '0.73rem', color: ch.vod_media_id ? '#e2e8f0' : AP.muted, wordBreak: 'break-all' }}>
-                {ch.vod_media_id || 'Processing…'}
-              </Typography>
-            </Box>
+            ) : renditionState === 'loading' ? (
+              /* Fetching rendition URL */
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, border: `1px solid ${AP.liveBdr}`, borderRadius: 2, bgcolor: AP.liveDim, px: 2, py: 1.5 }}>
+                <CircularProgress size={13} sx={{ color: AP.live, flexShrink: 0 }} />
+                <Typography sx={{ fontSize: '0.72rem', color: AP.muted }}>Checking for recording…</Typography>
+              </Box>
+            ) : renditionState === 'ready' ? (
+              /* MP4 is ready */
+              <Box sx={{ border: `1px solid ${AP.liveBdr}`, borderRadius: 2, bgcolor: AP.liveDim, px: 2, py: 1.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <DownloadIcon sx={{ fontSize: 14, color: AP.live }} />
+                    <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: AP.live }}>Recording Ready</Typography>
+                  </Box>
+                  {vodDaysLeft !== null && (
+                    <Typography sx={{ fontSize: '0.65rem', color: vodDaysLeft === 0 ? '#f87171' : AP.muted }}>{vodDaysLeft}d remaining</Typography>
+                  )}
+                </Box>
+                {downloading ? (
+                  <Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                      <Typography sx={{ fontSize: '0.68rem', color: AP.live }}>Downloading…</Typography>
+                      <Typography sx={{ fontSize: '0.68rem', color: AP.muted }}>{dlProgress}%</Typography>
+                    </Box>
+                    <Box sx={{ height: 6, borderRadius: 3, bgcolor: 'rgba(16,185,129,0.15)', overflow: 'hidden' }}>
+                      <Box sx={{
+                        height: '100%', borderRadius: 3,
+                        bgcolor: AP.live,
+                        width: `${dlProgress}%`,
+                        transition: 'width 0.15s ease',
+                      }} />
+                    </Box>
+                  </Box>
+                ) : (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    fullWidth
+                    startIcon={<DownloadIcon sx={{ fontSize: '14px !important' }} />}
+                    onClick={handleDownload}
+                    sx={{ fontSize: '0.72rem', fontWeight: 600, bgcolor: 'rgba(16,185,129,0.15)', color: AP.live, border: `1px solid ${AP.liveBdr}`, boxShadow: 'none', '&:hover': { bgcolor: 'rgba(16,185,129,0.25)', boxShadow: 'none' } }}
+                  >
+                    Download MP4
+                  </Button>
+                )}
+              </Box>
+            ) : renditionState === 'not_ready' ? (
+              /* Event ended but MP4 not yet transcoded */
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25, border: '1px solid rgba(245,158,11,0.25)', borderRadius: 2, bgcolor: 'rgba(245,158,11,0.07)', px: 2, py: 1.5 }}>
+                <DownloadIcon sx={{ fontSize: 15, color: AP.warn, mt: '1px', flexShrink: 0 }} />
+                <Box>
+                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: AP.warn, mb: 0.25 }}>Recording Processing</Typography>
+                  <Typography sx={{ fontSize: '0.68rem', color: AP.muted, lineHeight: 1.5 }}>
+                    The recording is still being processed. Check back shortly.
+                  </Typography>
+                </Box>
+              </Box>
+            ) : renditionState === 'expired' ? (
+              /* Recording no longer available */
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25, border: '1px solid rgba(100,116,139,0.25)', borderRadius: 2, bgcolor: 'rgba(100,116,139,0.07)', px: 2, py: 1.5 }}>
+                <DownloadIcon sx={{ fontSize: 15, color: AP.muted, mt: '1px', flexShrink: 0 }} />
+                <Box>
+                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: AP.muted, mb: 0.25 }}>Recording Unavailable</Typography>
+                  <Typography sx={{ fontSize: '0.68rem', color: AP.muted, lineHeight: 1.5 }}>
+                    This recording is no longer available for download.
+                  </Typography>
+                </Box>
+              </Box>
+            ) : (
+              /* Error or idle fallback */
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25, border: '1px solid rgba(239,68,68,0.2)', borderRadius: 2, bgcolor: 'rgba(239,68,68,0.06)', px: 2, py: 1.5 }}>
+                <DownloadIcon sx={{ fontSize: 15, color: '#f87171', mt: '1px', flexShrink: 0 }} />
+                <Typography sx={{ fontSize: '0.68rem', color: AP.muted, lineHeight: 1.5 }}>
+                  Could not retrieve recording. Try reopening this stream.
+                </Typography>
+              </Box>
+            )}
           </Box>
         )}
       </Box>
@@ -1127,35 +1485,48 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview })
             sx={{ fontSize: '0.72rem', fontWeight: 600, bgcolor: AP.accentDim, color: AP.accent, border: `1px solid ${AP.accentBdr}`, boxShadow: 'none', '&:hover': { bgcolor: AP.accent, color: '#fff', boxShadow: 'none' } }}
           >Preview</Button>
         )}
-        {ch.enable_live_to_vod && vodUrl && (
-          <Button size="small" variant="contained" startIcon={<DownloadIcon sx={{ fontSize: '15px !important' }} />}
-            component="a" href={vodUrl} download={`${ch.name}.mp4`}
-            sx={{ fontSize: '0.72rem', fontWeight: 600, bgcolor: AP.liveDim, color: AP.live, border: `1px solid ${AP.liveBdr}`, boxShadow: 'none', '&:hover': { bgcolor: AP.live, color: '#fff', boxShadow: 'none' } }}
-          >Download{vodDaysLeft !== null ? ` · ${vodDaysLeft}d` : ''}</Button>
-        )}
         <Box sx={{ flex: 1 }} />
-        <Button size="small" variant="contained" startIcon={<DeleteIcon sx={{ fontSize: '15px !important' }} />}
-          onClick={() => { onDelete(ch.id, ch.name); onClose() }}
-          sx={{ fontSize: '0.72rem', fontWeight: 600, bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', boxShadow: 'none', '&:hover': { bgcolor: 'rgba(239,68,68,0.2)', boxShadow: 'none' } }}
-        >Delete</Button>
+        {!isPast && !readOnly && (
+          <Button size="small" variant="contained" startIcon={<DeleteIcon sx={{ fontSize: '15px !important' }} />}
+            onClick={() => { onDelete(ch.id, ch.name, ch.youtube_broadcast_id, ch.youtube_stream_id, ch.facebook_live_video_id); onClose() }}
+            sx={{ fontSize: '0.72rem', fontWeight: 600, bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', boxShadow: 'none', '&:hover': { bgcolor: 'rgba(239,68,68,0.2)', boxShadow: 'none' } }}
+          >Delete</Button>
+        )}
       </Box>
     </Drawer>
   )
 }
 
-function CreateStreamDrawer({ open, token, onClose, onCreated }) {
+function CreateStreamDrawer({ open, token, tenantId, onClose, onCreated }) {
+  const { tenant }        = useTenant()
+  const TZ                = tenant?.timezone || 'America/New_York'
+  const tzLabel           = getTzLabel(TZ)
   const [channelType, setChannelType] = useState('live_event')
   const [title, setTitle]             = useState('')
   const [region, setRegion]           = useState('us-east-1')
   const [ingestFormat, setIngestFormat] = useState('rtmp')
-  const [startDate, setStartDate]     = useState(() => defaultStreamTimes().startDate)
-  const [startTime, setStartTime]     = useState(() => defaultStreamTimes().startTime)
-  const [endDate, setEndDate]         = useState(() => defaultStreamTimes().endDate)
-  const [endTime, setEndTime]         = useState(() => defaultStreamTimes().endTime)
+  const [sourceUrl, setSourceUrl]     = useState('')
+  const [startDate, setStartDate]     = useState(() => defaultStreamTimes(TZ).startDate)
+  const [startTime, setStartTime]     = useState(() => defaultStreamTimes(TZ).startTime)
+  const [endDate, setEndDate]         = useState(() => defaultStreamTimes(TZ).endDate)
+  const [endTime, setEndTime]         = useState(() => defaultStreamTimes(TZ).endTime)
   const [ingestPointId, setIngestPointId] = useState('')
   const [ingestPoints, setIngestPoints]   = useState([])
   const [loadingPoints, setLoadingPoints] = useState(false)
-  const [downloadable, setDownloadable]   = useState(false)
+  const [downloadable,    setDownloadable]    = useState(false)
+  const [createYoutube,       setCreateYoutube]       = useState(false)
+  const [youtubeConnected,    setYoutubeConnected]    = useState(false)
+  const [youtubeChannel,      setYoutubeChannel]      = useState(null)
+  const [youtubeThumbnail,    setYoutubeThumbnail]    = useState(null)   // File object
+  const [ytThumbPreview,      setYtThumbPreview]      = useState(null)   // object URL
+  const [ytThumbStatus,       setYtThumbStatus]       = useState('idle') // 'idle'|'uploading'|'done'|'error'
+  const [createFacebook,      setCreateFacebook]      = useState(false)
+  const [facebookConnected,   setFacebookConnected]   = useState(false)
+  const [facebookPage,        setFacebookPage]        = useState(null)   // { page_name, page_picture }
+  const [showNewIngest,       setShowNewIngest]       = useState(false)
+  const [newIngestName,       setNewIngestName]       = useState('')
+  const [creatingIngest,      setCreatingIngest]      = useState(false)
+  const [newIngestError,      setNewIngestError]      = useState('')
 
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState('')
@@ -1171,51 +1542,138 @@ function CreateStreamDrawer({ open, token, onClose, onCreated }) {
     setTitle('')
     setRegion('us-east-1')
     setIngestFormat('rtmp')
-    const t = defaultStreamTimes()
+    setSourceUrl('')
+    const t = defaultStreamTimes(TZ)
     setStartDate(t.startDate)
     setStartTime(t.startTime)
     setEndDate(t.endDate)
     setEndTime(t.endTime)
     setIngestPointId('')
     setDownloadable(false)
+    setCreateYoutube(false)
+    setYoutubeThumbnail(null)
+    setYtThumbPreview(null)
+    setYtThumbStatus('idle')
+    setCreateFacebook(false)
+    setShowNewIngest(false)
+    setNewIngestName('')
+    setNewIngestError('')
     setError('')
+    // Check YouTube connection status
+    fetch('/api/youtube-status', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        setYoutubeConnected(!!data?.connected)
+        setYoutubeChannel(data?.connected ? data : null)
+      })
+      .catch(() => setYoutubeConnected(false))
+    // Check Facebook connection status
+    fetch('/api/facebook-status', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        setFacebookConnected(!!data?.connected)
+        setFacebookPage(data?.connected ? data : null)
+      })
+      .catch(() => setFacebookConnected(false))
     setResult(null)
     setCopiedField(null)
     setStartTimeTouched(false)
     setEndTimeTouched(false)
     loadIngestPoints('rtmp')
-    // Fetch live pricing rates (public endpoint, no auth needed)
-    fetch('/api/pricing')
+    // Pricing is now Super-Admin-only/global — non-Super-Admins simply won't
+    // see a cost estimate here (fetch fails gracefully, no error shown).
+    fetch('/api/pricing', { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data) setPricing(data) })
       .catch(() => {})
   }, [open, token]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ingestDebounceRef = useRef(null)
+  const ingestDebounceRef   = useRef(null)
+  const prevIngestFormatRef = useRef(ingestFormat)
+
   useEffect(() => {
     if (!open) return
+    // When the format changes, immediately wipe the current selection and list
+    // so the user never sees a point from the old format lingering.
+    if (prevIngestFormatRef.current !== ingestFormat) {
+      prevIngestFormatRef.current = ingestFormat
+      setIngestPointId('')
+      setIngestPoints([])
+      setShowNewIngest(false)
+    }
     // Debounce: wait until user stops changing time fields before hitting the API
     clearTimeout(ingestDebounceRef.current)
     ingestDebounceRef.current = setTimeout(() => loadIngestPoints(), 600)
     return () => clearTimeout(ingestDebounceRef.current)
   }, [ingestFormat, startDate, startTime, endDate, endTime]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  async function handleCreateIngestPoint() {
+    if (!newIngestName.trim()) return
+    const jwFormat = INGEST_FORMAT_MAP[ingestFormat]
+    if (!jwFormat) return
+    setCreatingIngest(true)
+    setNewIngestError('')
+    try {
+      const res = await fetch('/api/create-ingest-point', {
+        method:  'POST',
+        headers: authHeader(token, tenantId),
+        body:    JSON.stringify({ name: newIngestName.trim(), ingest_format: jwFormat }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setNewIngestError(data.error || `Error ${res.status}`); return }
+      // Refresh the list and auto-select the new point
+      setShowNewIngest(false)
+      setNewIngestName('')
+      await new Promise(resolve => {
+        const startUtc = toUtcIso(startDate, fromTimeInput(startTime), TZ)
+        const endUtc   = toUtcIso(endDate, fromTimeInput(endTime), TZ)
+        let url = `/api/ingest-points?ingest_format=${jwFormat}`
+        if (startUtc) url += `&start_date=${encodeURIComponent(startUtc)}`
+        if (endUtc)   url += `&end_date=${encodeURIComponent(endUtc)}`
+        fetch(url, { headers: authHeader(token, tenantId) })
+          .then(r => r.json())
+          .then(d => {
+            const pts = d.ingest_points || []
+            setIngestPoints(pts)
+            setIngestPointId(data.id) // auto-select the new point
+            resolve()
+          })
+          .catch(() => resolve())
+      })
+    } catch (err) {
+      setNewIngestError(err.message)
+    } finally {
+      setCreatingIngest(false)
+    }
+  }
+
+  // Formats that support static ingest points and the JW API format key to query
+  const INGEST_FORMAT_MAP = {
+    rtmp:    'rtmp',
+    rtmps:   'rtmp',   // RTMPS reuses RTMP ingest infrastructure
+    srt:     'srt',
+    rtp:     'rtp',
+    rtp_fec: 'rtp_fec',
+    // srt_pull, hls, and hls_pull do NOT support static ingest points
+  }
+  const supportsIngestPoint = ingestFormat in INGEST_FORMAT_MAP
+  // Pull-type ingest formats fetch from a source URL instead of exposing a push endpoint
+  const isPullFormat = ingestFormat === 'srt_pull' || ingestFormat === 'hls_pull'
+
   function loadIngestPoints() {
-    const fmt      = ['rtmp', 'srt'].includes(ingestFormat) ? ingestFormat : 'rtmp'
-    const startUtc = toUtcIso(startDate, fromTimeInput(startTime))
-    const endUtc   = toUtcIso(endDate, fromTimeInput(endTime))
+    const fmt = INGEST_FORMAT_MAP[ingestFormat]
+    if (!fmt) { setIngestPoints([]); setIngestPointId(''); return }
+    const startUtc = toUtcIso(startDate, fromTimeInput(startTime), TZ)
+    const endUtc   = toUtcIso(endDate, fromTimeInput(endTime), TZ)
     setLoadingPoints(true)
-    // Don't reset ingestPointId or clear the list here — keep the current UI
-    // stable while the new fetch is in flight to prevent layout jumps
     let url = `/api/ingest-points?ingest_format=${fmt}`
     if (startUtc) url += `&start_date=${encodeURIComponent(startUtc)}`
     if (endUtc)   url += `&end_date=${encodeURIComponent(endUtc)}`
-    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(url, { headers: authHeader(token, tenantId) })
       .then(r => r.json())
       .then(data => {
         const pts = data.ingest_points || []
         setIngestPoints(pts)
-        // Only reset the selection if the previously chosen point is no longer available
         setIngestPointId(prev => pts.find(p => p.id === prev) ? prev : '')
       })
       .catch(() => setIngestPoints([]))
@@ -1234,28 +1692,68 @@ function CreateStreamDrawer({ open, token, onClose, onCreated }) {
         channel_type: channelType,
         ingest_format: ingestFormat,
         ingest_point_id: ingestPointId || undefined,
+        source_url: isPullFormat ? sourceUrl.trim() : undefined,
         downloadable,
+        create_youtube:  createYoutube  && youtubeConnected,
+        create_facebook: createFacebook && facebookConnected,
       }
 
       if (channelType === 'live_event') {
-        const startUtc = toUtcIso(startDate, startAMPM)
-        const endUtc   = toUtcIso(endDate,   endAMPM)
+        const startUtc = toUtcIso(startDate, startAMPM, TZ)
+        const endUtc   = toUtcIso(endDate,   endAMPM,   TZ)
         if (!startUtc) throw new Error('Invalid start date/time')
         const minsAway = (new Date(startUtc) - Date.now()) / 60_000
-        if (minsAway < 15) throw new Error('Start time must be at least 15 minutes from now')
+        if (minsAway < 15) throw new Error('Start time must be at least 15 minutes in the future. Please adjust the start time and try again.')
         body.start_time_utc = startUtc
         if (endUtc) body.end_time_utc = endUtc
       }
 
       const res = await fetch('/api/create-stream', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        headers: authHeader(token, tenantId),
         body: JSON.stringify(body),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(`${data.error}${data.detail ? ` — ${data.detail}` : ''}`)
+      if (!res.ok) {
+        // Pull human-readable description out of JW's error JSON when available
+        let friendly = data.error || 'Stream creation failed'
+        if (data.detail) {
+          try {
+            const parsed = JSON.parse(data.detail)
+            const desc = parsed?.errors?.[0]?.description
+            if (desc) friendly = desc
+          } catch { /* detail wasn't JSON */ }
+        }
+        throw new Error(friendly)
+      }
       setResult(data)
       onCreated(data)
+
+      // Upload YouTube thumbnail if one was selected
+      if (data.youtube?.broadcast_id && youtubeThumbnail) {
+        setYtThumbStatus('uploading')
+        try {
+          const base64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result.split(',')[1]) // strip data:...;base64,
+            reader.onerror = reject
+            reader.readAsDataURL(youtubeThumbnail)
+          })
+          const thumbRes = await fetch('/api/youtube-set-thumbnail', {
+            method: 'POST',
+            headers: authHeader(token, tenantId),
+            body: JSON.stringify({
+              broadcast_id:     data.youtube.broadcast_id,
+              jw_stream_id:     data.id,
+              thumbnail_base64: base64,
+              thumbnail_mime:   youtubeThumbnail.type || 'image/jpeg',
+            }),
+          })
+          setYtThumbStatus(thumbRes.ok ? 'done' : 'error')
+        } catch {
+          setYtThumbStatus('error')
+        }
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1270,17 +1768,16 @@ function CreateStreamDrawer({ open, token, onClose, onCreated }) {
     setTimeout(() => setCopiedField(null), 2000)
   }
 
-  const tzLabel = 'ET'
   const startAMPM    = fromTimeInput(startTime)
-  const startUtcIso  = channelType === 'live_event' ? toUtcIso(startDate, startAMPM) : null
-  const endUtcIso    = channelType === 'live_event' ? toUtcIso(endDate, fromTimeInput(endTime)) : null
+  const startUtcIso  = channelType === 'live_event' ? toUtcIso(startDate, startAMPM, TZ) : null
+  const endUtcIso    = channelType === 'live_event' ? toUtcIso(endDate, fromTimeInput(endTime), TZ) : null
   const minutesUntilStart = startUtcIso ? (new Date(startUtcIso) - Date.now()) / 60_000 : null
   const tooSoonRaw       = minutesUntilStart !== null && minutesUntilStart < 15
   const endBeforeStartRaw = startUtcIso && endUtcIso && new Date(endUtcIso) <= new Date(startUtcIso)
   // Only show errors after user has blurred the field
   const tooSoon          = tooSoonRaw && startTimeTouched
   const endNotAfterStart = endBeforeStartRaw && endTimeTouched
-  const isValid = title && (channelType === 'always_on' || (startDate && startTime && endDate && endTime && !tooSoonRaw && !endBeforeStartRaw))
+  const isValid = title && (!isPullFormat || sourceUrl.trim()) && (channelType === 'always_on' || (startDate && startTime && endDate && endTime && !tooSoonRaw && !endBeforeStartRaw))
   const sectionLabel = { color: '#cbd5e1', fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.09em', mb: 0.75 }
 
   // Helper to render a copyable URL / key row in the result card
@@ -1324,7 +1821,31 @@ function CreateStreamDrawer({ open, token, onClose, onCreated }) {
 
         {/* Scrollable content */}
         <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2.5, pr: 2.5, pb: 3, scrollbarGutter: 'stable' }}>
-          {error && <Alert severity="error" sx={{ fontSize: '0.8rem' }}>{error}</Alert>}
+          {error && (
+            <Box sx={{
+              display: 'flex', alignItems: 'flex-start', gap: 1.25,
+              border: '1px solid rgba(239,68,68,0.35)', borderRadius: 2,
+              bgcolor: 'rgba(239,68,68,0.08)', px: 2, py: 1.5,
+            }}>
+              <Box sx={{
+                width: 18, height: 18, borderRadius: '50%', flexShrink: 0, mt: '1px',
+                bgcolor: 'rgba(239,68,68,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Typography sx={{ fontSize: '0.6rem', fontWeight: 900, color: '#f87171', lineHeight: 1 }}>!</Typography>
+              </Box>
+              <Box sx={{ flex: 1 }}>
+                <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#f87171', mb: 0.25 }}>
+                  Unable to create stream
+                </Typography>
+                <Typography sx={{ fontSize: '0.72rem', color: 'rgba(248,113,113,0.85)', lineHeight: 1.5 }}>
+                  {error}
+                </Typography>
+              </Box>
+              <Box onClick={() => setError('')} sx={{ cursor: 'pointer', color: 'rgba(248,113,113,0.5)', '&:hover': { color: '#f87171' }, mt: '1px' }}>
+                <CloseIcon sx={{ fontSize: 14 }} />
+              </Box>
+            </Box>
+          )}
 
           {!result ? (
             <>
@@ -1440,35 +1961,105 @@ function CreateStreamDrawer({ open, token, onClose, onCreated }) {
                 </>
               )}
 
+              {/* ── Source URL (pull-type ingest formats) ───────── */}
+              {isPullFormat && (
+                <Box>
+                  <Typography sx={sectionLabel}>SOURCE URL</Typography>
+                  <TextField
+                    fullWidth size="small"
+                    placeholder="https://example.com/live/stream.m3u8"
+                    value={sourceUrl}
+                    onChange={e => setSourceUrl(e.target.value)}
+                  />
+                  <Typography sx={{ fontSize: '0.68rem', color: AP.muted, mt: 0.5 }}>
+                    JW Player will pull the stream from this URL instead of exposing a push endpoint.
+                  </Typography>
+                </Box>
+              )}
+
               {/* ── Ingest Point ───────────────────────────────── */}
-              <Box>
-                <Typography sx={sectionLabel}>INGEST POINT (optional)</Typography>
-                <TextField
-                  select fullWidth size="small" label="Ingest Point"
-                  value={ingestPointId}
-                  onChange={e => !loadingPoints && setIngestPointId(e.target.value)}
-                  disabled={loadingPoints}
-                  helperText={
-                    loadingPoints
-                      ? 'Checking availability…'
-                      : startDate
-                        ? 'Availability checked against your selected time window'
-                        : 'Set start/end time to check availability'
-                  }
-                  InputProps={{
-                    endAdornment: loadingPoints
-                      ? <CircularProgress size={14} sx={{ color: AP.muted, mr: 2.5, flexShrink: 0 }} />
-                      : undefined,
-                  }}
-                >
-                  <MenuItem value="">— Auto-assign —</MenuItem>
-                  {ingestPoints.map(p => (
-                    <MenuItem key={p.id} value={p.id}>
-                      {p.name}{p.available ? ' ✓ available' : ' — in use'}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              </Box>
+              {supportsIngestPoint && (
+                <Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.75 }}>
+                    <Typography sx={sectionLabel}>STATIC INGEST POINT</Typography>
+                    <Box
+                      onClick={() => { setShowNewIngest(v => !v); setNewIngestName(''); setNewIngestError('') }}
+                      sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', color: showNewIngest ? AP.muted : AP.accent, fontSize: '0.68rem', fontWeight: 600, '&:hover': { color: '#fff' }, transition: 'color 0.15s' }}
+                    >
+                      {showNewIngest
+                        ? <><Box component="span" sx={{ fontSize: '1rem', lineHeight: 1, mt: '-1px' }}>×</Box> Cancel</>
+                        : <><Box component="span" sx={{ fontSize: '1rem', lineHeight: 1, mt: '-1px' }}>+</Box> New</>
+                      }
+                    </Box>
+                  </Box>
+
+                  {/* Inline create form */}
+                  {showNewIngest && (
+                    <Box sx={{ mb: 1, p: 1.5, borderRadius: 1.5, border: `1px solid ${AP.accentBdr}`, bgcolor: AP.accentDim, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', color: AP.accent, textTransform: 'uppercase' }}>
+                        New {(INGEST_FORMAT_MAP[ingestFormat] || ingestFormat).toUpperCase()} Ingest Point
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+                        <TextField
+                          size="small" fullWidth
+                          placeholder="e.g. Main Court Encoder"
+                          value={newIngestName}
+                          onChange={e => { setNewIngestName(e.target.value); setNewIngestError('') }}
+                          onKeyDown={e => { if (e.key === 'Enter') handleCreateIngestPoint() }}
+                          error={!!newIngestError}
+                          helperText={newIngestError || ' '}
+                          sx={{ '& .MuiInputBase-root': { fontSize: '0.8rem' } }}
+                        />
+                        <Button
+                          variant="contained" size="small"
+                          onClick={handleCreateIngestPoint}
+                          disabled={creatingIngest || !newIngestName.trim()}
+                          sx={{ mt: '1px', flexShrink: 0, bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov }, fontSize: '0.72rem', fontWeight: 700, whiteSpace: 'nowrap' }}
+                        >
+                          {creatingIngest ? <CircularProgress size={13} sx={{ color: '#fff' }} /> : 'Create'}
+                        </Button>
+                      </Box>
+                    </Box>
+                  )}
+
+                  <TextField
+                    select fullWidth size="small"
+                    value={ingestPointId}
+                    onChange={e => !loadingPoints && setIngestPointId(e.target.value)}
+                    disabled={loadingPoints}
+                    SelectProps={{ displayEmpty: true }}
+                    helperText={
+                      loadingPoints
+                        ? 'Checking availability…'
+                        : startDate
+                          ? 'Availability checked against your selected time window'
+                          : 'Set start/end time to check availability'
+                    }
+                    InputProps={{
+                      endAdornment: loadingPoints
+                        ? <CircularProgress size={14} sx={{ color: AP.muted, mr: 2.5, flexShrink: 0 }} />
+                        : undefined,
+                    }}
+                  >
+                    <MenuItem value="">System Default</MenuItem>
+                    {ingestPoints.map(p => (
+                      <MenuItem key={p.id} value={p.id} sx={{ display: 'flex', alignItems: 'center' }}>
+                        <span style={{ flex: 1 }}>{p.name}</span>
+                        <Box component="span" sx={{
+                          fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.08em',
+                          px: 0.9, py: 0.25, borderRadius: '20px', flexShrink: 0, ml: 2,
+                          ...(p.available
+                            ? { color: '#10b981', bgcolor: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)' }
+                            : { color: '#f59e0b', bgcolor: 'rgba(245,158,11,0.1)',  border: '1px solid rgba(245,158,11,0.3)' }
+                          ),
+                        }}>
+                          {p.available ? 'Available' : 'In Use'}
+                        </Box>
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Box>
+              )}
 
 
               <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)' }} />
@@ -1513,11 +2104,175 @@ function CreateStreamDrawer({ open, token, onClose, onCreated }) {
                 </Box>
               </Box>
 
+              {/* ── YouTube Simulcast ──────────────────────────── */}
+              {youtubeConnected ? (
+                <Box
+                  onClick={() => setCreateYoutube(v => !v)}
+                  sx={{
+                    border: `1px solid ${createYoutube ? 'rgba(255,0,0,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                    borderRadius: 1.5, p: 1.75,
+                    bgcolor: createYoutube ? 'rgba(255,0,0,0.07)' : 'rgba(255,255,255,0.02)',
+                    cursor: 'pointer', transition: 'all 0.15s',
+                    '&:hover': { borderColor: createYoutube ? 'rgba(255,0,0,0.6)' : 'rgba(255,255,255,0.2)' },
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Box component="img"
+                      src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"
+                      sx={{ width: 22, height: 22, flexShrink: 0, opacity: createYoutube ? 1 : 0.4 }}
+                    />
+                    <Box sx={{ flex: 1 }}>
+                      <Typography sx={{ fontSize: '0.85rem', fontWeight: 700, color: createYoutube ? '#fff' : AP.muted, lineHeight: 1.2 }}>
+                        Simulcast to YouTube
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.68rem', color: AP.muted, mt: 0.25 }}>
+                        {youtubeChannel?.channel_name
+                          ? `Auto-creates a live stream on ${youtubeChannel.channel_name}`
+                          : 'Auto-creates a YouTube Live broadcast'}
+                      </Typography>
+                    </Box>
+                    <Switch
+                      checked={createYoutube}
+                      onChange={e => { e.stopPropagation(); setCreateYoutube(e.target.checked) }}
+                      size="small"
+                      sx={{
+                        '& .MuiSwitch-switchBase.Mui-checked': { color: '#ff0000' },
+                        '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { bgcolor: '#ff0000' },
+                      }}
+                    />
+                  </Box>
+                </Box>
+              ) : (
+                <Box sx={{ border: '1px solid rgba(255,255,255,0.06)', borderRadius: 1.5, p: 1.75, bgcolor: 'rgba(255,255,255,0.01)', display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                  <Box component="img"
+                    src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"
+                    sx={{ width: 22, height: 22, flexShrink: 0, opacity: 0.25 }}
+                  />
+                  <Box sx={{ flex: 1 }}>
+                    <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: 'rgba(148,163,184,0.4)', lineHeight: 1.2 }}>Simulcast to YouTube</Typography>
+                    <Typography sx={{ fontSize: '0.68rem', color: 'rgba(148,163,184,0.3)', mt: 0.25 }}>
+                      Connect your YouTube account in Settings to enable
+                    </Typography>
+                  </Box>
+                </Box>
+              )}
+
+              {/* ── Facebook Simulcast ────────────────────────── */}
+              {facebookConnected ? (
+                <Box
+                  onClick={() => setCreateFacebook(v => !v)}
+                  sx={{
+                    border: `1px solid ${createFacebook ? 'rgba(24,119,242,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                    borderRadius: 1.5, p: 1.75,
+                    bgcolor: createFacebook ? 'rgba(24,119,242,0.08)' : 'rgba(255,255,255,0.02)',
+                    cursor: 'pointer', transition: 'all 0.15s',
+                    '&:hover': { borderColor: createFacebook ? 'rgba(24,119,242,0.7)' : 'rgba(255,255,255,0.2)' },
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Box sx={{ width: 22, height: 22, borderRadius: '5px', bgcolor: '#1877F2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: createFacebook ? 1 : 0.4 }}>
+                      <Box component="svg" viewBox="0 0 24 24" sx={{ width: 13, height: 13, fill: '#fff' }}>
+                        <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
+                      </Box>
+                    </Box>
+                    <Box sx={{ flex: 1 }}>
+                      <Typography sx={{ fontSize: '0.85rem', fontWeight: 700, color: createFacebook ? '#fff' : AP.muted, lineHeight: 1.2 }}>
+                        Simulcast to Facebook
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.68rem', color: AP.muted, mt: 0.25 }}>
+                        {facebookPage?.page_name
+                          ? `Auto-creates a live video on ${facebookPage.page_name}`
+                          : 'Auto-creates a Facebook Live broadcast'}
+                      </Typography>
+                    </Box>
+                    <Switch
+                      checked={createFacebook}
+                      onChange={e => { e.stopPropagation(); setCreateFacebook(e.target.checked) }}
+                      size="small"
+                      sx={{
+                        '& .MuiSwitch-switchBase.Mui-checked': { color: '#1877F2' },
+                        '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { bgcolor: '#1877F2' },
+                      }}
+                    />
+                  </Box>
+                </Box>
+              ) : (
+                <Box sx={{ border: '1px solid rgba(255,255,255,0.06)', borderRadius: 1.5, p: 1.75, bgcolor: 'rgba(255,255,255,0.01)', display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                  <Box sx={{ width: 22, height: 22, borderRadius: '5px', bgcolor: '#1877F2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: 0.25 }}>
+                    <Box component="svg" viewBox="0 0 24 24" sx={{ width: 13, height: 13, fill: '#fff' }}>
+                      <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
+                    </Box>
+                  </Box>
+                  <Box sx={{ flex: 1 }}>
+                    <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: 'rgba(148,163,184,0.4)', lineHeight: 1.2 }}>Simulcast to Facebook</Typography>
+                    <Typography sx={{ fontSize: '0.68rem', color: 'rgba(148,163,184,0.3)', mt: 0.25 }}>
+                      Connect your Facebook Page in Settings to enable
+                    </Typography>
+                  </Box>
+                </Box>
+              )}
+
+              {/* ── YouTube Thumbnail ─────────────────────────── */}
+              {createYoutube && youtubeConnected && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: AP.muted, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                    YouTube Thumbnail <Box component="span" sx={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(optional)</Box>
+                  </Typography>
+
+                  {ytThumbPreview ? (
+                    /* Preview — forced 16:9 via padding trick */
+                    <Box sx={{ position: 'relative', width: '100%', paddingTop: '56.25%', borderRadius: 1.5, overflow: 'hidden', border: '1px solid rgba(255,0,0,0.35)' }}>
+                      <Box component="img" src={ytThumbPreview} alt="thumbnail"
+                        sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                      <Box
+                        onClick={() => { setYoutubeThumbnail(null); setYtThumbPreview(null) }}
+                        sx={{
+                          position: 'absolute', top: 8, right: 8,
+                          bgcolor: 'rgba(0,0,0,0.65)', borderRadius: '50%',
+                          width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          cursor: 'pointer', '&:hover': { bgcolor: 'rgba(0,0,0,0.9)' },
+                        }}
+                      >
+                        <CloseIcon sx={{ fontSize: 14, color: '#fff' }} />
+                      </Box>
+                    </Box>
+                  ) : (
+                    /* Upload drop zone */
+                    <Box
+                      component="label"
+                      sx={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                        gap: 0.75, border: '1px dashed rgba(255,255,255,0.15)', borderRadius: 1.5,
+                        py: 2.5, cursor: 'pointer', bgcolor: 'rgba(255,255,255,0.02)',
+                        transition: 'all 0.15s',
+                        '&:hover': { borderColor: 'rgba(255,0,0,0.4)', bgcolor: 'rgba(255,0,0,0.04)' },
+                      }}
+                    >
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        style={{ display: 'none' }}
+                        onChange={e => {
+                          const file = e.target.files?.[0]
+                          if (!file) return
+                          setYoutubeThumbnail(file)
+                          setYtThumbPreview(URL.createObjectURL(file))
+                        }}
+                      />
+                      <ImageIcon sx={{ fontSize: 22, color: AP.muted, opacity: 0.6 }} />
+                      <Typography sx={{ fontSize: '0.72rem', color: AP.muted }}>Click to upload thumbnail</Typography>
+                      <Typography sx={{ fontSize: '0.63rem', color: 'rgba(148,163,184,0.4)' }}>JPEG · PNG · 16:9 recommended</Typography>
+                    </Box>
+                  )}
+                </Box>
+              )}
+
               {/* ── Estimated Total ────────────────────────────── */}
               {(() => {
                 const feedRate   = pricing?.feed_rate_per_hr ?? 15
-                const startUtc   = channelType === 'live_event' ? toUtcIso(startDate, fromTimeInput(startTime)) : null
-                const endUtc     = channelType === 'live_event' ? toUtcIso(endDate,   fromTimeInput(endTime))   : null
+                const startUtc   = channelType === 'live_event' ? toUtcIso(startDate, fromTimeInput(startTime), TZ) : null
+                const endUtc     = channelType === 'live_event' ? toUtcIso(endDate,   fromTimeInput(endTime),   TZ) : null
                 const hours      = (startUtc && endUtc) ? Math.max(0, (new Date(endUtc) - new Date(startUtc)) / 3_600_000) : null
                 const streamCost = hours != null ? hours * feedRate : null
                 const vodCost    = downloadable ? 5 : 0
@@ -1626,15 +2381,70 @@ function CreateStreamDrawer({ open, token, onClose, onCreated }) {
                     sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: 'rgba(255,255,255,0.06)', color: AP.muted }}
                   />
                 </Box>
-                {result.warm_up_start && (
+                {result.stream_warmup && result.stream_type !== '24/7' && (
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="caption" sx={{ color: AP.muted, fontWeight: 700, letterSpacing: '0.07em', fontSize: '0.6rem' }}>WARM-UP STARTS</Typography>
+                    <Typography variant="caption" sx={{ color: AP.muted, fontWeight: 700, letterSpacing: '0.07em', fontSize: '0.6rem' }}>WARM-UP</Typography>
                     <Typography variant="caption" sx={{ color: AP.warn, fontFamily: 'monospace', fontSize: '0.65rem' }}>
-                      {new Date(result.warm_up_start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })} ET
+                      {result.stream_warmup} min before go-live
                     </Typography>
                   </Box>
                 )}
               </Box>
+
+              {/* YouTube result */}
+              {result.youtube && (
+                <Box sx={{ border: '1px solid rgba(255,0,0,0.3)', borderRadius: 2, bgcolor: 'rgba(255,0,0,0.05)', p: 2 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <Box component="img"
+                      src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"
+                      sx={{ width: 16, height: 16 }}
+                    />
+                    <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: '#fff' }}>YouTube Live Created</Typography>
+                    {ytThumbStatus === 'uploading' && (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 'auto' }}>
+                        <CircularProgress size={10} sx={{ color: AP.muted }} />
+                        <Typography sx={{ fontSize: '0.63rem', color: AP.muted }}>Uploading thumbnail…</Typography>
+                      </Box>
+                    )}
+                    {ytThumbStatus === 'done' && (
+                      <Typography sx={{ fontSize: '0.63rem', color: AP.live, ml: 'auto' }}>● Thumbnail set</Typography>
+                    )}
+                    {ytThumbStatus === 'error' && (
+                      <Typography sx={{ fontSize: '0.63rem', color: '#f87171', ml: 'auto' }}>Thumbnail upload failed</Typography>
+                    )}
+                  </Box>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <CopyRow fieldKey="yt_watch" label="WATCH URL" value={result.youtube.watch_url}
+                      icon={<LinkIcon />}
+                    />
+                    <CopyRow fieldKey="yt_rtmp" label="RTMP URL" value={result.youtube.rtmp_url}
+                      icon={<LinkIcon />}
+                    />
+                    <CopyRow fieldKey="yt_key" label="STREAM KEY" value={result.youtube.stream_key}
+                      icon={<VpnKeyIcon />}
+                    />
+                  </Box>
+                </Box>
+              )}
+
+              {/* Facebook result */}
+              {result.facebook && (
+                <Box sx={{ border: '1px solid rgba(24,119,242,0.35)', borderRadius: 2, bgcolor: 'rgba(24,119,242,0.06)', p: 2 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <Box sx={{ width: 16, height: 16, borderRadius: '4px', bgcolor: '#1877F2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <Box component="svg" viewBox="0 0 24 24" sx={{ width: 9, height: 9, fill: '#fff' }}>
+                        <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
+                      </Box>
+                    </Box>
+                    <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: '#fff' }}>Facebook Live Created</Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <CopyRow fieldKey="fb_watch" label="WATCH URL"  value={result.facebook.watch_url}   icon={<LinkIcon />}  />
+                    <CopyRow fieldKey="fb_rtmp"  label="RTMP URL"   value={result.facebook.rtmp_url}    icon={<LinkIcon />}  />
+                    <CopyRow fieldKey="fb_key"   label="STREAM KEY" value={result.facebook.stream_key}  icon={<VpnKeyIcon />} />
+                  </Box>
+                </Box>
+              )}
             </Box>
           )}
         </Box>{/* end scrollable content */}
@@ -1661,6 +2471,8 @@ function CreateStreamDrawer({ open, token, onClose, onCreated }) {
 // ─── Tournament card (with collapsible days table) ────────────────────────────
 
 function TournamentCard({ tournament, channels, token, onRefresh, onAddDay, onEditDay, onDeleteDay, onOpenPicker, onEditTournament, onDeleteTournament }) { // eslint-disable-line no-unused-vars
+  const { tenant } = useTenant()
+  const TZ         = tenant?.timezone || 'America/New_York'
   const [expanded, setExpanded] = useState(false)
 
   const dateRange = getTournamentDateRange(tournament)
@@ -1763,7 +2575,7 @@ function TournamentCard({ tournament, channels, token, onRefresh, onAddDay, onEd
                   </TableCell>
                   <TableCell>
                     <Typography variant="caption" sx={{ color: '#fff', fontWeight: 600, display: 'block', whiteSpace: 'nowrap' }}>{formatDate(day.date)}</Typography>
-                    <Typography variant="caption" sx={{ color: '#a8bcd4', whiteSpace: 'nowrap' }}>{day.start_time} – {day.end_time} {/^E[DS]T$/.test(day.tz) ? 'ET' : (day.tz || 'ET')}</Typography>
+                    <Typography variant="caption" sx={{ color: '#a8bcd4', whiteSpace: 'nowrap' }}>{day.start_time} – {day.end_time} {getTzLabel(day.tz || TZ)}</Typography>
                   </TableCell>
 
                   <TableCell>
@@ -2086,6 +2898,8 @@ function TournamentCostCard({ tournament, cdnRecords = [] }) {
 // ─── Costs page ───────────────────────────────────────────────────────────────
 
 function CostsPage({ tournaments, channels, cdnRecords = [], cdnPricing }) {
+  const { tenant } = useTenant()
+  const TZ         = tenant?.timezone || 'America/New_York'
 
   function fmtUSD(n) { return '$' + Number(n || 0).toFixed(2) }
 
@@ -2093,7 +2907,7 @@ function CostsPage({ tournaments, channels, cdnRecords = [], cdnPricing }) {
   const channelsByDate = {}
   channels.forEach(ch => {
     if (!ch.stream_start) return
-    const date = new Date(ch.stream_start).toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+    const date = new Date(ch.stream_start).toLocaleDateString('en-CA', { timeZone: TZ })
     if (!channelsByDate[date]) channelsByDate[date] = []
     channelsByDate[date].push(ch)
   })
@@ -2129,7 +2943,7 @@ function CostsPage({ tournaments, channels, cdnRecords = [], cdnPricing }) {
         return { ...day, ...totals, feedCount: recs.length, source: 'logged' }
       } else if (jwChannels.length > 0) {
         // Determine day status from JW channel status field
-        const isActive    = jwChannels.some(ch => ch.status?.toLowerCase() === 'active')
+        const isActive    = jwChannels.some(ch => ['active','streaming'].includes(ch.status?.toLowerCase()))
         const hasEnded    = jwChannels.some(ch => ch.stream_end && new Date(ch.stream_end) <= new Date())
         const isScheduled = !isActive && !hasEnded
         const source      = isActive ? 'live' : hasEnded ? 'pending' : 'scheduled'
@@ -2252,7 +3066,7 @@ function CostsPage({ tournaments, channels, cdnRecords = [], cdnPricing }) {
 
 // ─── Preview player dialog ────────────────────────────────────────────────────
 
-function PreviewPlayerDialog({ open, onClose, channelName, streamUrl }) {
+function PreviewPlayerDialog({ open, onClose, onExited, channelName, streamUrl }) {
   const playerRef = useRef(null)
   const divRef    = useRef(null)
 
@@ -2274,6 +3088,7 @@ function PreviewPlayerDialog({ open, onClose, channelName, streamUrl }) {
       .catch(err => console.error('JW preview failed:', err))
     return () => {
       cancelled = true
+      // Remove JW player before React unmounts the div to avoid DOM conflicts
       if (playerRef.current) {
         try { playerRef.current.remove() } catch (_) {}
         playerRef.current = null
@@ -2282,7 +3097,12 @@ function PreviewPlayerDialog({ open, onClose, channelName, streamUrl }) {
   }, [open, streamUrl])
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md"
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="md"
+      TransitionProps={{ onExited }}
       PaperProps={{ sx: { bgcolor: '#000', border: `1px solid ${AP.accentBdr}`, borderRadius: 2 } }}
     >
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1, px: 2, bgcolor: AP.paper, borderBottom: `1px solid rgba(255,255,255,0.07)` }}>
@@ -2298,12 +3118,16 @@ function PreviewPlayerDialog({ open, onClose, channelName, streamUrl }) {
         </IconButton>
       </DialogTitle>
       <DialogContent sx={{ p: 0 }}>
-        {streamUrl
-          ? <div id={PREVIEW_DIV_ID} ref={divRef} style={{ width: '100%' }} />
-          : <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300, bgcolor: '#000' }}>
+        {/* Always keep the div mounted while the dialog is alive — never conditionally
+            swap it out mid-animation or JW's direct DOM manipulation conflicts with
+            React's reconciler (removeChild NotFoundError). */}
+        <div id={PREVIEW_DIV_ID} ref={divRef} style={{ width: '100%' }}>
+          {!streamUrl && (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300, bgcolor: '#000' }}>
               <Typography variant="body2" sx={{ color: AP.muted }}>No stream URL available</Typography>
             </Box>
-        }
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   )
@@ -2338,7 +3162,7 @@ const COMPONENT_LABELS = {
   pre_show_screen: 'Pre-Show Screen',
 }
 
-function TenantSettingsPanel({ token }) {
+function TenantSettingsPanel({ token, tenantId }) {
   const [form, setForm]       = useState(null)
   const [saving, setSaving]   = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
@@ -2346,14 +3170,14 @@ function TenantSettingsPanel({ token }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/tenant')
+    fetch('/api/tenant', { headers: { 'X-Tenant-Id': tenantId } })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) setForm({
           title:    data.title    || '',
           subtitle: data.subtitle || '',
           logo_url: data.logo_url || '',
-          timezone: data.timezone || 'ET',
+          timezone: data.timezone || 'America/New_York',
           colors: {
             primary:    data.colors?.primary    || '#e65d2c',
             secondary:  data.colors?.secondary  || '#0a205a',
@@ -2386,7 +3210,7 @@ function TenantSettingsPanel({ token }) {
     try {
       const res = await fetch('/api/tenant', {
         method: 'PUT',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        headers: authHeader(token, tenantId),
         body: JSON.stringify(form),
       })
       const data = await res.json()
@@ -2408,79 +3232,97 @@ function TenantSettingsPanel({ token }) {
   if (!form) return <Alert severity="error">Failed to load tenant settings</Alert>
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
       {saveMsg && <Alert severity="success">{saveMsg}</Alert>}
       {saveErr && <Alert severity="error">{saveErr}</Alert>}
 
-      {/* Branding */}
-      <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
-        <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid rgba(255,255,255,0.07)', background: `linear-gradient(90deg, ${AP.accentDim} 0%, transparent 60%)`, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem' }}>BRANDING</Typography>
-        </Box>
-        <Box sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <TextField size="small" fullWidth label="Team / Organization Name" value={form.title} onChange={e => setField('title', e.target.value)} />
-          <TextField size="small" fullWidth label="Subtitle" value={form.subtitle} onChange={e => setField('subtitle', e.target.value)} placeholder="e.g. Sport Fishing Championship" />
-          <TextField size="small" fullWidth label="Logo URL" value={form.logo_url} onChange={e => setField('logo_url', e.target.value)} placeholder="https://..." />
-          <TextField size="small" label="Default Timezone" value={form.timezone || ''} onChange={e => setField('timezone', e.target.value)}
-            placeholder="ET" helperText="Used on all sessions (e.g. ET, PT, CT)" sx={{ width: 220 }} />
-          {form.logo_url && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Box component="img" src={form.logo_url} alt="Logo preview"
-                sx={{ width: 56, height: 56, objectFit: 'contain', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1, bgcolor: 'rgba(0,0,0,0.4)', p: 0.5, flexShrink: 0 }} />
-              <Typography variant="caption" sx={{ color: AP.muted }}>Logo preview</Typography>
-            </Box>
-          )}
-        </Box>
-      </Paper>
+      {/* ── Row 1: Branding + Feature Flags side by side ── */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
 
-      {/* Colors */}
+        {/* Branding */}
+        <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
+          <Box sx={{ px: 2, py: 1.25, borderBottom: '1px solid rgba(255,255,255,0.07)', background: `linear-gradient(90deg, ${AP.accentDim} 0%, transparent 60%)` }}>
+            <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '0.95rem' }}>BRANDING</Typography>
+          </Box>
+          <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.75 }}>
+            <TextField size="small" fullWidth label="Team / Organization Name" value={form.title} onChange={e => setField('title', e.target.value)} />
+            <TextField size="small" fullWidth label="Subtitle" value={form.subtitle} onChange={e => setField('subtitle', e.target.value)} placeholder="e.g. Sport Fishing Championship" />
+            <TextField size="small" fullWidth label="Logo URL" value={form.logo_url} onChange={e => setField('logo_url', e.target.value)} placeholder="https://..." />
+            <TextField
+              select size="small" fullWidth label="Default Timezone"
+              value={form.timezone || 'America/New_York'}
+              onChange={e => setField('timezone', e.target.value)}
+              helperText="All event times are displayed in this timezone"
+            >
+              {[
+                { value: 'America/New_York',    label: 'Eastern Time (ET)'    },
+                { value: 'America/Chicago',     label: 'Central Time (CT)'    },
+                { value: 'America/Denver',      label: 'Mountain Time (MT)'   },
+                { value: 'America/Phoenix',     label: 'Mountain Time – AZ (no DST)' },
+                { value: 'America/Los_Angeles', label: 'Pacific Time (PT)'    },
+                { value: 'America/Anchorage',   label: 'Alaska Time (AKT)'    },
+                { value: 'Pacific/Honolulu',    label: 'Hawaii Time (HT)'     },
+                { value: 'America/Puerto_Rico', label: 'Atlantic Time (AST)'  },
+                { value: 'Europe/London',       label: 'London (GMT/BST)'     },
+                { value: 'Europe/Paris',        label: 'Central Europe (CET)' },
+                { value: 'Asia/Tokyo',          label: 'Japan (JST)'          },
+                { value: 'Australia/Sydney',    label: 'Sydney (AEST)'        },
+              ].map(opt => (
+                <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+              ))}
+            </TextField>
+            {form.logo_url && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                <Box component="img" src={form.logo_url} alt="Logo preview"
+                  sx={{ width: 44, height: 44, objectFit: 'contain', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1, bgcolor: 'rgba(0,0,0,0.4)', p: 0.5, flexShrink: 0 }} />
+                <Typography variant="caption" sx={{ color: AP.muted }}>Logo preview</Typography>
+              </Box>
+            )}
+          </Box>
+        </Paper>
+
+        {/* Feature Flags */}
+        <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
+          <Box sx={{ px: 2, py: 1.25, borderBottom: '1px solid rgba(255,255,255,0.07)', background: `linear-gradient(90deg, ${AP.accentDim} 0%, transparent 60%)` }}>
+            <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '0.95rem' }}>FEATURE FLAGS</Typography>
+          </Box>
+          <Box sx={{ px: 2, py: 0.5 }}>
+            {Object.entries(COMPONENT_LABELS).map(([key, label], i, arr) => (
+              <Box key={key} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1, borderBottom: i < arr.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                <Box>
+                  <Typography variant="body2" sx={{ color: AP.text, fontWeight: 600, fontSize: '0.82rem' }}>{label}</Typography>
+                  <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.6rem', fontFamily: 'monospace' }}>{key}</Typography>
+                </Box>
+                <Switch
+                  checked={form.components[key]}
+                  onChange={e => setField(`components.${key}`, e.target.checked)}
+                  size="small"
+                  sx={{
+                    '& .MuiSwitch-switchBase.Mui-checked':                     { color: AP.accent },
+                    '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track':  { bgcolor: AP.accent },
+                  }}
+                />
+              </Box>
+            ))}
+          </Box>
+        </Paper>
+      </Box>
+
+      {/* ── Row 2: Color Palette (full width, compact) ── */}
       <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
-        <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid rgba(255,255,255,0.07)', background: `linear-gradient(90deg, ${AP.accentDim} 0%, transparent 60%)`, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <PaletteIcon sx={{ color: AP.accent, fontSize: 18 }} />
-          <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem' }}>COLOR PALETTE</Typography>
+        <Box sx={{ px: 2, py: 1.25, borderBottom: '1px solid rgba(255,255,255,0.07)', background: `linear-gradient(90deg, ${AP.accentDim} 0%, transparent 60%)`, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <PaletteIcon sx={{ color: AP.accent, fontSize: 16 }} />
+          <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '0.95rem' }}>COLOR PALETTE</Typography>
         </Box>
-        <Box sx={{ p: 2.5, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
+        <Box sx={{ p: 2, display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
           <ColorField label="Primary"    value={form.colors.primary}    onChange={v => setField('colors.primary', v)} />
           <ColorField label="Secondary"  value={form.colors.secondary}  onChange={v => setField('colors.secondary', v)} />
           <ColorField label="Background" value={form.colors.background} onChange={v => setField('colors.background', v)} />
           <ColorField label="Paper"      value={form.colors.paper}      onChange={v => setField('colors.paper', v)} />
         </Box>
-        <Box sx={{ px: 2.5, pb: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-          {Object.entries(form.colors).map(([key, val]) => (
-            <Box key={key} sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-              <Box sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: val, border: '1px solid rgba(255,255,255,0.25)', flexShrink: 0 }} />
-              <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem' }}>{key}</Typography>
-            </Box>
-          ))}
-        </Box>
       </Paper>
 
-      {/* Feature flags */}
-      <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
-        <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid rgba(255,255,255,0.07)', background: `linear-gradient(90deg, ${AP.accentDim} 0%, transparent 60%)` }}>
-          <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem' }}>FEATURE FLAGS</Typography>
-        </Box>
-        <Box sx={{ px: 2.5, py: 1 }}>
-          {Object.entries(COMPONENT_LABELS).map(([key, label], i, arr) => (
-            <Box key={key} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1, borderBottom: i < arr.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-              <Box>
-                <Typography variant="body2" sx={{ color: AP.text, fontWeight: 600 }}>{label}</Typography>
-                <Typography variant="caption" sx={{ color: AP.muted, fontSize: '0.62rem', fontFamily: 'monospace' }}>{key}</Typography>
-              </Box>
-              <Switch
-                checked={form.components[key]}
-                onChange={e => setField(`components.${key}`, e.target.checked)}
-                size="small"
-                sx={{
-                  '& .MuiSwitch-switchBase.Mui-checked':                     { color: AP.accent },
-                  '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track':  { bgcolor: AP.accent },
-                }}
-              />
-            </Box>
-          ))}
-        </Box>
-      </Paper>
-
+      {/* ── Save ── */}
       <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
         <Button variant="contained" onClick={handleSave} disabled={saving}
           sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov }, fontWeight: 700, px: 3 }}
@@ -2488,6 +3330,426 @@ function TenantSettingsPanel({ token }) {
           {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : 'Save Settings'}
         </Button>
       </Box>
+    </Box>
+  )
+}
+
+// ─── YouTube Integration Panel ────────────────────────────────────────────────
+
+function YouTubeIntegrationPanel({ token, tenantId }) {
+  const [status,       setStatus]       = useState(null)   // null | { connected, channel_name, channel_thumbnail }
+  const [loading,      setLoading]      = useState(true)
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [connecting,   setConnecting]   = useState(false)
+
+  useEffect(() => {
+    fetch('/api/youtube-status', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setStatus(data))
+      .catch(() => setStatus(null))
+      .finally(() => setLoading(false))
+  }, [token, tenantId])
+
+  async function handleConnect() {
+    setConnecting(true)
+    try {
+      const res = await fetch('/api/oauth-ticket', { headers: authHeader(token, tenantId) })
+      if (!res.ok) throw new Error('Failed to start YouTube connection')
+      const { ticket } = await res.json()
+      window.location.href = `/api/youtube-auth?ticket=${encodeURIComponent(ticket)}`
+    } catch (err) {
+      alert(err.message)
+      setConnecting(false)
+    }
+  }
+
+  async function handleDisconnect() {
+    if (!confirm('Disconnect YouTube? Future streams will not simulcast to YouTube.')) return
+    setDisconnecting(true)
+    try {
+      await fetch('/api/youtube-disconnect', {
+        method: 'DELETE',
+        headers: authHeader(token, tenantId),
+      })
+      setStatus({ connected: false })
+    } catch (err) {
+      alert('Failed to disconnect: ' + err.message)
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
+  return (
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+        <Box component="img"
+          src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"
+          sx={{ width: 24, height: 24 }}
+        />
+        <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>YouTube</Typography>
+        <Typography sx={{ fontSize: '0.72rem', color: AP.muted }}>Simulcast live streams to your YouTube channel</Typography>
+      </Box>
+
+      {loading ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={14} sx={{ color: AP.muted }} />
+          <Typography sx={{ fontSize: '0.75rem', color: AP.muted }}>Checking connection…</Typography>
+        </Box>
+      ) : status?.connected ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            {status.channel_thumbnail && (
+              <Box component="img" src={status.channel_thumbnail}
+                sx={{ width: 32, height: 32, borderRadius: '50%', border: '2px solid rgba(255,0,0,0.4)' }}
+              />
+            )}
+            <Box sx={{ flex: 1 }}>
+              <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: '#fff' }}>{status.channel_name || 'Google Account (no channel)'}</Typography>
+              <Typography sx={{ fontSize: '0.68rem', color: AP.live }}>● Connected</Typography>
+            </Box>
+            <Button
+              size="small" variant="outlined"
+              onClick={handleDisconnect}
+              disabled={disconnecting}
+              sx={{ fontSize: '0.72rem', borderColor: 'rgba(239,68,68,0.4)', color: '#f87171',
+                '&:hover': { borderColor: '#f87171', bgcolor: 'rgba(239,68,68,0.08)' } }}
+            >
+              {disconnecting ? <CircularProgress size={12} /> : 'Disconnect'}
+            </Button>
+          </Box>
+          {!status.channel_name && (
+            <Box sx={{ bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1.5, px: 1.5, py: 1 }}>
+              <Typography sx={{ fontSize: '0.7rem', color: '#fbbf24', lineHeight: 1.5 }}>
+                No YouTube channel found on this account. To simulcast, the connected Google account must have a YouTube channel.{' '}
+                <Box component="a" href="https://www.youtube.com/create_channel" target="_blank" rel="noopener noreferrer"
+                  sx={{ color: '#fbbf24', textDecoration: 'underline' }}>
+                  Create one on YouTube
+                </Box>
+                {' '}then disconnect and reconnect here.
+              </Typography>
+            </Box>
+          )}
+        </Box>
+      ) : (
+        <Button
+          variant="contained"
+          onClick={handleConnect}
+          disabled={connecting}
+          startIcon={
+            connecting ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : (
+              <Box component="img"
+                src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"
+                sx={{ width: 16, height: 16 }}
+              />
+            )
+          }
+          sx={{ bgcolor: '#ff0000', '&:hover': { bgcolor: '#cc0000' }, fontWeight: 700, fontSize: '0.78rem', textDecoration: 'none' }}
+        >
+          Connect YouTube Account
+        </Button>
+      )}
+    </Box>
+  )
+}
+
+// ─── Facebook Integration Panel ──────────────────────────────────────────────
+
+function FacebookIntegrationPanel({ token, tenantId }) {
+  const [status,        setStatus]        = useState(null)   // null | { connected, page_id, page_name, page_picture }
+  const [loading,       setLoading]       = useState(true)
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [connecting,    setConnecting]    = useState(false)
+
+  useEffect(() => {
+    fetch('/api/facebook-status', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setStatus(data))
+      .catch(() => setStatus(null))
+      .finally(() => setLoading(false))
+  }, [token, tenantId])
+
+  async function handleConnect() {
+    setConnecting(true)
+    try {
+      const res = await fetch('/api/oauth-ticket', { headers: authHeader(token, tenantId) })
+      if (!res.ok) throw new Error('Failed to start Facebook connection')
+      const { ticket } = await res.json()
+      window.location.href = `/api/facebook-auth?ticket=${encodeURIComponent(ticket)}`
+    } catch (err) {
+      alert(err.message)
+      setConnecting(false)
+    }
+  }
+
+  async function handleDisconnect() {
+    if (!confirm('Disconnect Facebook? Future streams will not simulcast to Facebook.')) return
+    setDisconnecting(true)
+    try {
+      await fetch('/api/facebook-disconnect', {
+        method:  'DELETE',
+        headers: authHeader(token, tenantId),
+      })
+      setStatus({ connected: false })
+    } catch (err) {
+      alert('Failed to disconnect: ' + err.message)
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
+  return (
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+        {/* Facebook "f" logo — inline SVG keeps us dependency-free */}
+        <Box sx={{ width: 24, height: 24, borderRadius: '6px', bgcolor: '#1877F2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Box component="svg" viewBox="0 0 24 24" sx={{ width: 14, height: 14, fill: '#fff' }}>
+            <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
+          </Box>
+        </Box>
+        <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>Facebook</Typography>
+        <Typography sx={{ fontSize: '0.72rem', color: AP.muted }}>Simulcast live streams to your Facebook Page</Typography>
+      </Box>
+
+      {loading ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={14} sx={{ color: AP.muted }} />
+          <Typography sx={{ fontSize: '0.75rem', color: AP.muted }}>Checking connection…</Typography>
+        </Box>
+      ) : status?.connected ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          {status.page_picture && (
+            <Box component="img" src={status.page_picture}
+              sx={{ width: 32, height: 32, borderRadius: '50%', border: '2px solid rgba(24,119,242,0.5)' }}
+            />
+          )}
+          <Box sx={{ flex: 1 }}>
+            <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: '#fff' }}>{status.page_name || 'Facebook Page'}</Typography>
+            <Typography sx={{ fontSize: '0.68rem', color: '#60a5fa' }}>● Connected</Typography>
+          </Box>
+          <Button
+            size="small" variant="outlined"
+            onClick={handleDisconnect}
+            disabled={disconnecting}
+            sx={{ fontSize: '0.72rem', borderColor: 'rgba(239,68,68,0.4)', color: '#f87171',
+              '&:hover': { borderColor: '#f87171', bgcolor: 'rgba(239,68,68,0.08)' } }}
+          >
+            {disconnecting ? <CircularProgress size={12} /> : 'Disconnect'}
+          </Button>
+        </Box>
+      ) : (
+        <Button
+          variant="contained"
+          onClick={handleConnect}
+          disabled={connecting}
+          startIcon={
+            connecting ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : (
+              <Box sx={{ width: 16, height: 16, borderRadius: '4px', bgcolor: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Box component="svg" viewBox="0 0 24 24" sx={{ width: 10, height: 10, fill: '#1877F2' }}>
+                  <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
+                </Box>
+              </Box>
+            )
+          }
+          sx={{ bgcolor: '#1877F2', '&:hover': { bgcolor: '#1464d0' }, fontWeight: 700, fontSize: '0.78rem', textDecoration: 'none' }}
+        >
+          Connect Facebook Page
+        </Button>
+      )}
+    </Box>
+  )
+}
+
+// ─── Ingest Points Panel ──────────────────────────────────────────────────────
+
+const INGEST_POINT_FORMATS = [
+  { value: 'rtmp',    label: 'RTMP'    },
+  { value: 'srt',     label: 'SRT'     },
+  { value: 'rtp',     label: 'RTP'     },
+  { value: 'rtp_fec', label: 'RTP FEC' },
+]
+
+function IngestPointsPanel({ token, tenantId }) {
+  const [points,       setPoints]       = useState([])
+  const [loading,      setLoading]      = useState(true)
+  const [newName,      setNewName]      = useState('')
+  const [newFormat,    setNewFormat]    = useState('rtmp')
+  const [showForm,     setShowForm]     = useState(false)
+  const [creating,     setCreating]     = useState(false)
+  const [deletingId,   setDeletingId]   = useState(null)
+  const [formError,    setFormError]    = useState('')
+
+  useEffect(() => { fetchPoints() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function fetchPoints() {
+    setLoading(true)
+    // Fetch all formats in parallel and merge
+    Promise.all(
+      INGEST_POINT_FORMATS.map(f =>
+        fetch(`/api/ingest-points?ingest_format=${f.value}`, { headers: authHeader(token, tenantId) })
+          .then(r => r.ok ? r.json() : { ingest_points: [] })
+          .then(d => d.ingest_points || [])
+          .catch(() => [])
+      )
+    ).then(results => {
+      // Deduplicate by id (some ingest points may appear in multiple format queries)
+      const seen = new Set()
+      const all  = results.flat().filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true })
+      all.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      setPoints(all)
+    }).finally(() => setLoading(false))
+  }
+
+  async function handleCreate() {
+    if (!newName.trim()) return
+    setCreating(true)
+    setFormError('')
+    try {
+      const res = await fetch('/api/create-ingest-point', {
+        method:  'POST',
+        headers: authHeader(token, tenantId),
+        body:    JSON.stringify({ name: newName.trim(), ingest_format: newFormat }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setFormError(data.error || `Error ${res.status}`); return }
+      setNewName('')
+      setShowForm(false)
+      fetchPoints()
+    } catch (err) {
+      setFormError(err.message)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function handleDelete(point) {
+    if (!point.available) return // blocked — shown via UI, not confirm
+    if (!confirm(`Delete ingest point "${point.name}"? This cannot be undone.`)) return
+    setDeletingId(point.id)
+    try {
+      await fetch('/api/delete-ingest-point', {
+        method:  'DELETE',
+        headers: authHeader(token, tenantId),
+        body:    JSON.stringify({ id: point.id }),
+      })
+      setPoints(prev => prev.filter(p => p.id !== point.id))
+    } catch (_) { /* non-fatal */ } finally {
+      setDeletingId(null)
+    }
+  }
+
+  const fmtColors = {
+    rtmp:    { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.3)'  },
+    srt:     { color: '#38bdf8', bg: 'rgba(56,189,248,0.1)',  border: 'rgba(56,189,248,0.3)'  },
+    rtp:     { color: '#34d399', bg: 'rgba(52,211,153,0.1)',  border: 'rgba(52,211,153,0.3)'  },
+    rtp_fec: { color: '#34d399', bg: 'rgba(52,211,153,0.1)',  border: 'rgba(52,211,153,0.3)'  },
+  }
+
+  return (
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', overflow: 'hidden' }}>
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2.5, pt: 2, pb: showForm ? 1.5 : 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <RouterIcon sx={{ fontSize: 22, color: AP.muted }} />
+          <Box>
+            <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff', lineHeight: 1.2 }}>Ingest Points</Typography>
+            <Typography sx={{ fontSize: '0.72rem', color: AP.muted }}>Dedicated encoder connection slots</Typography>
+          </Box>
+        </Box>
+        <Button
+          size="small" variant="outlined"
+          onClick={() => { setShowForm(v => !v); setNewName(''); setFormError('') }}
+          startIcon={showForm ? null : <AddIcon sx={{ fontSize: '14px !important' }} />}
+          sx={{ fontSize: '0.72rem', borderColor: showForm ? 'rgba(255,255,255,0.15)' : AP.accentBdr, color: showForm ? AP.muted : AP.accent, '&:hover': { borderColor: '#fff', color: '#fff' } }}
+        >
+          {showForm ? 'Cancel' : 'New'}
+        </Button>
+      </Box>
+
+      {/* Inline create form */}
+      {showForm && (
+        <Box sx={{ mx: 2.5, mb: 2, p: 1.5, borderRadius: 1.5, border: `1px solid ${AP.accentBdr}`, bgcolor: AP.accentDim }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+            <TextField
+              size="small" placeholder="e.g. Main Court Encoder"
+              value={newName} onChange={e => { setNewName(e.target.value); setFormError('') }}
+              onKeyDown={e => e.key === 'Enter' && handleCreate()}
+              error={!!formError} helperText={formError || ' '}
+              sx={{ flex: 1, '& .MuiInputBase-root': { fontSize: '0.8rem' } }}
+            />
+            <Box component="select"
+              value={newFormat}
+              onChange={e => setNewFormat(e.target.value)}
+              sx={{ bgcolor: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 1, color: '#fff', fontSize: '0.75rem', px: 1, py: '7px', cursor: 'pointer', outline: 'none', mt: '1px' }}
+            >
+              {INGEST_POINT_FORMATS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </Box>
+            <Button
+              variant="contained" size="small"
+              onClick={handleCreate}
+              disabled={creating || !newName.trim()}
+              sx={{ mt: '1px', flexShrink: 0, bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov }, fontSize: '0.72rem', fontWeight: 700 }}
+            >
+              {creating ? <CircularProgress size={13} sx={{ color: '#fff' }} /> : 'Create'}
+            </Button>
+          </Box>
+        </Box>
+      )}
+
+      {/* List */}
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+          <CircularProgress size={18} sx={{ color: AP.muted }} />
+        </Box>
+      ) : points.length === 0 ? (
+        <Box sx={{ px: 2.5, pb: 2.5, textAlign: 'center' }}>
+          <Typography sx={{ fontSize: '0.75rem', color: 'rgba(148,163,184,0.4)', fontStyle: 'italic' }}>No ingest points yet</Typography>
+        </Box>
+      ) : (
+        <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          {points.map((p, i) => {
+            const fc = fmtColors[p.format] || { color: AP.muted, bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.12)' }
+            return (
+              <Box key={p.id} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2.5, py: 1.25, borderBottom: i < points.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                {/* Format badge */}
+                <Box sx={{ fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.1em', px: 0.9, py: 0.3, borderRadius: '4px', bgcolor: fc.bg, color: fc.color, border: `1px solid ${fc.border}`, flexShrink: 0, textTransform: 'uppercase' }}>
+                  {p.format?.replace('_', ' ') || '—'}
+                </Box>
+                {/* Name */}
+                <Typography sx={{ flex: 1, fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0' }}>{p.name}</Typography>
+                {/* Availability */}
+                <Box sx={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.06em', px: 0.9, py: 0.25, borderRadius: '20px', flexShrink: 0,
+                  ...(p.available
+                    ? { color: '#10b981', bgcolor: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)' }
+                    : { color: '#f59e0b', bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)' }
+                  ),
+                }}>
+                  {p.available ? 'Available' : 'In Use'}
+                </Box>
+                {/* Delete */}
+                <Tooltip title={!p.available ? 'Cannot delete — ingest point is currently in use' : 'Delete ingest point'}>
+                  <span>
+                    <IconButton size="small"
+                      onClick={() => handleDelete(p)}
+                      disabled={deletingId === p.id || !p.available}
+                      sx={{
+                        flexShrink: 0,
+                        color: !p.available ? 'rgba(148,163,184,0.2)' : 'rgba(148,163,184,0.4)',
+                        '&:hover': { color: p.available ? '#f87171' : 'rgba(148,163,184,0.2)' },
+                        '&.Mui-disabled': { color: 'rgba(148,163,184,0.2)' },
+                      }}
+                    >
+                      {deletingId === p.id
+                        ? <CircularProgress size={13} sx={{ color: AP.muted }} />
+                        : <DeleteIcon sx={{ fontSize: 15 }} />
+                      }
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Box>
+            )
+          })}
+        </Box>
+      )}
     </Box>
   )
 }
@@ -2509,7 +3771,7 @@ function CdnReadOnlyPanel({ records = [], channels = [], pricing, tournaments = 
     return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
   }
   function chDate(ch) {
-    return new Date(ch.stream_start).toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+    return new Date(ch.stream_start).toLocaleDateString('en-CA', { timeZone: TZ })
   }
   function streamHours(ch) {
     const s = new Date(ch.stream_start)
@@ -2526,7 +3788,7 @@ function CdnReadOnlyPanel({ records = [], channels = [], pricing, tournaments = 
       const record = records.find(r => r.channel_id === ch.id && r.date === date)
       // Use JW status field: 'active' = streaming, ended stream_end = pending, future = scheduled
       const jwStatus  = ch.status?.toLowerCase()
-      const isActive  = jwStatus === 'active'
+      const isActive  = jwStatus === 'active' || jwStatus === 'streaming'
       const hasEnded  = ch.stream_end && new Date(ch.stream_end) <= new Date()
       const chStatus  = record ? 'logged' : isActive ? 'live' : hasEnded ? 'pending' : 'scheduled'
       return {
@@ -2700,9 +3962,442 @@ function CdnReadOnlyPanel({ records = [], channels = [], pricing, tournaments = 
   )
 }
 
+// ─── Team management (per-tenant Admin/Read-only members) ────────────────────
+
+function TenantMembersPanel({ token, tenantId, canManage }) {
+  const [members, setMembers] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState({ email: '', password: '', role: 'read_only' })
+  const [saving, setSaving] = useState(false)
+
+  const fetchMembers = useCallback(() => {
+    setLoading(true)
+    fetch('/api/tenant-members', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : { members: [] })
+      .then(data => setMembers(data.members || []))
+      .catch(() => setMembers([]))
+      .finally(() => setLoading(false))
+  }, [token, tenantId])
+
+  useEffect(() => { fetchMembers() }, [fetchMembers])
+
+  async function handleAdd(e) {
+    e.preventDefault()
+    setSaving(true); setError('')
+    try {
+      const res = await fetch('/api/tenant-members', {
+        method: 'POST',
+        headers: authHeader(token, tenantId),
+        body: JSON.stringify(form),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to add member')
+      setForm({ email: '', password: '', role: 'read_only' })
+      setShowForm(false)
+      fetchMembers()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleRoleChange(userId, role) {
+    await fetch('/api/tenant-members', {
+      method: 'PATCH',
+      headers: authHeader(token, tenantId),
+      body: JSON.stringify({ userId, role }),
+    })
+    fetchMembers()
+  }
+
+  async function handleRemove(userId, email) {
+    if (!confirm(`Remove ${email} from this organization?`)) return
+    await fetch('/api/tenant-members', {
+      method: 'DELETE',
+      headers: authHeader(token, tenantId),
+      body: JSON.stringify({ userId }),
+    })
+    fetchMembers()
+  }
+
+  return (
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+        <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>Team</Typography>
+        {canManage && (
+          <Button size="small" startIcon={<AddIcon />} onClick={() => setShowForm(v => !v)}
+            sx={{ fontSize: '0.72rem', color: AP.accent }}>
+            {showForm ? 'Cancel' : 'Add Member'}
+          </Button>
+        )}
+      </Box>
+
+      {showForm && (
+        <Box component="form" onSubmit={handleAdd} sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          <TextField size="small" type="email" label="Email" required value={form.email}
+            onChange={e => setForm({ ...form, email: e.target.value })} sx={{ minWidth: 180 }} />
+          <TextField size="small" type="password" label="Temporary Password" required value={form.password}
+            onChange={e => setForm({ ...form, password: e.target.value })} sx={{ minWidth: 160 }} />
+          <TextField select size="small" label="Role" value={form.role}
+            onChange={e => setForm({ ...form, role: e.target.value })} sx={{ minWidth: 130 }}>
+            <MenuItem value="admin">Admin</MenuItem>
+            <MenuItem value="read_only">Read Only</MenuItem>
+          </TextField>
+          <Button type="submit" variant="contained" disabled={saving} size="small"
+            sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
+            {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : 'Create'}
+          </Button>
+        </Box>
+      )}
+      {error && <Alert severity="error" sx={{ mb: 2, fontSize: '0.78rem' }}>{error}</Alert>}
+
+      {loading ? (
+        <CircularProgress size={20} sx={{ color: AP.accent }} />
+      ) : members.length === 0 ? (
+        <Typography sx={{ fontSize: '0.8rem', color: AP.muted }}>No team members yet.</Typography>
+      ) : (
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }}>EMAIL</TableCell>
+              <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }}>ROLE</TableCell>
+              {canManage && <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }} />}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {members.map(m => (
+              <TableRow key={m.userId}>
+                <TableCell sx={{ fontSize: '0.8rem', color: '#e2e8f0' }}>{m.email || m.userId}</TableCell>
+                <TableCell sx={{ fontSize: '0.8rem' }}>
+                  {canManage ? (
+                    <TextField select size="small" value={m.role} variant="standard"
+                      onChange={e => handleRoleChange(m.userId, e.target.value)}
+                      sx={{ '& .MuiInputBase-root': { fontSize: '0.78rem', color: '#e2e8f0' } }}>
+                      <MenuItem value="admin">Admin</MenuItem>
+                      <MenuItem value="read_only">Read Only</MenuItem>
+                    </TextField>
+                  ) : (
+                    <span style={{ color: '#94a3b8' }}>{m.role === 'admin' ? 'Admin' : 'Read Only'}</span>
+                  )}
+                </TableCell>
+                {canManage && (
+                  <TableCell align="right">
+                    <IconButton size="small" onClick={() => handleRemove(m.userId, m.email)} sx={{ color: 'rgba(248,113,113,0.5)' }}>
+                      <DeleteIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </TableCell>
+                )}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </Box>
+  )
+}
+
+// ─── Tenants (Super Admin only, global) ───────────────────────────────────────
+
+function TenantsPanel({ token }) {
+  const [tenantsList, setTenantsList] = useState([])
+  const [loading, setLoading]         = useState(true)
+  const [error, setError]             = useState('')
+  const [showForm, setShowForm]       = useState(false)
+  const [form, setForm] = useState({ name: '', slug: '', timezone: 'America/New_York', jwSiteId: '', jwApiSecret: '' })
+  const [saving, setSaving] = useState(false)
+  const [editTenant, setEditTenant] = useState(null) // { id, name, timezone, jwSiteId, jwApiSecret } | null
+  const [editSaving, setEditSaving] = useState(false)
+  const [editError, setEditError]   = useState('')
+
+  const fetchTenants = useCallback(() => {
+    setLoading(true)
+    fetch('/api/tenants', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : { tenants: [] })
+      .then(data => setTenantsList(data.tenants || []))
+      .catch(() => setTenantsList([]))
+      .finally(() => setLoading(false))
+  }, [token])
+
+  useEffect(() => { fetchTenants() }, [fetchTenants])
+
+  async function handleCreate(e) {
+    e.preventDefault()
+    setSaving(true); setError('')
+    try {
+      const res = await fetch('/api/tenants', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to create tenant')
+      setForm({ name: '', slug: '', timezone: 'America/New_York', jwSiteId: '', jwApiSecret: '' })
+      setShowForm(false)
+      fetchTenants()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function openEdit(t) {
+    setEditError('')
+    setEditTenant({ id: t.id, name: t.name, timezone: t.timezone || 'America/New_York', jwSiteId: t.jwSiteId || '', jwApiSecret: '' })
+  }
+
+  async function handleEditSave(e) {
+    e.preventDefault()
+    setEditSaving(true); setEditError('')
+    try {
+      const body = { id: editTenant.id, name: editTenant.name, timezone: editTenant.timezone, jwSiteId: editTenant.jwSiteId }
+      if (editTenant.jwApiSecret.trim()) body.jwApiSecret = editTenant.jwApiSecret.trim()
+      const res = await fetch('/api/tenants', {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to update tenant')
+      setEditTenant(null)
+      fetchTenants()
+    } catch (err) {
+      setEditError(err.message)
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
+  return (
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5, maxWidth: 720 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+        <Typography sx={{ fontWeight: 700, fontSize: '1rem', color: '#fff' }}>Tenants</Typography>
+        <Button size="small" startIcon={<AddIcon />} onClick={() => setShowForm(v => !v)} sx={{ fontSize: '0.72rem', color: AP.accent }}>
+          {showForm ? 'Cancel' : 'New Tenant'}
+        </Button>
+      </Box>
+
+      {showForm && (
+        <Box component="form" onSubmit={handleCreate} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 2, p: 2, border: `1px solid ${AP.accentBdr}`, borderRadius: 1.5, bgcolor: AP.accentDim }}>
+          <Box sx={{ display: 'flex', gap: 1.5 }}>
+            <TextField size="small" label="Name" required fullWidth value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+            <TextField size="small" label="Slug" required fullWidth value={form.slug} onChange={e => setForm({ ...form, slug: e.target.value })} placeholder="e.g. acme-sports" />
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1.5 }}>
+            <TextField size="small" label="JW Site ID" fullWidth value={form.jwSiteId} onChange={e => setForm({ ...form, jwSiteId: e.target.value })} />
+            <TextField size="small" label="JW API Secret" fullWidth type="password" value={form.jwApiSecret} onChange={e => setForm({ ...form, jwApiSecret: e.target.value })} />
+          </Box>
+          <Typography sx={{ fontSize: '0.68rem', color: AP.muted }}>
+            JW credentials can be left blank and added later — the tenant just won't be able to manage streams until then.
+          </Typography>
+          <Button type="submit" variant="contained" disabled={saving} sx={{ alignSelf: 'flex-start', bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
+            {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : 'Create Tenant'}
+          </Button>
+        </Box>
+      )}
+      {error && <Alert severity="error" sx={{ mb: 2, fontSize: '0.78rem' }}>{error}</Alert>}
+
+      {loading ? (
+        <CircularProgress size={20} sx={{ color: AP.accent }} />
+      ) : (
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }}>NAME</TableCell>
+              <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }}>SLUG</TableCell>
+              <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }}>JW PLAYER</TableCell>
+              <TableCell />
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {tenantsList.map(t => (
+              <TableRow key={t.id}>
+                <TableCell sx={{ fontSize: '0.8rem', color: '#e2e8f0' }}>{t.name}</TableCell>
+                <TableCell sx={{ fontSize: '0.8rem', color: '#94a3b8' }}>{t.slug}</TableCell>
+                <TableCell>
+                  <Chip label={t.jwConfigured ? 'Configured' : 'Not configured'} size="small"
+                    sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700,
+                      bgcolor: t.jwConfigured ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)',
+                      color: t.jwConfigured ? '#10b981' : '#f59e0b' }} />
+                </TableCell>
+                <TableCell align="right">
+                  <IconButton size="small" onClick={() => openEdit(t)} sx={{ color: AP.muted }}>
+                    <EditIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <Dialog open={!!editTenant} onClose={() => setEditTenant(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontSize: '1rem', fontWeight: 700 }}>Edit Tenant</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+          {editError && <Alert severity="error" sx={{ fontSize: '0.78rem' }}>{editError}</Alert>}
+          {editTenant && (
+            <>
+              <TextField size="small" label="Name" fullWidth value={editTenant.name}
+                onChange={e => setEditTenant({ ...editTenant, name: e.target.value })} />
+              <TextField size="small" label="Timezone" fullWidth value={editTenant.timezone}
+                onChange={e => setEditTenant({ ...editTenant, timezone: e.target.value })} />
+              <TextField size="small" label="JW Site ID" fullWidth value={editTenant.jwSiteId}
+                onChange={e => setEditTenant({ ...editTenant, jwSiteId: e.target.value })} />
+              <TextField size="small" label="JW API Secret" fullWidth type="password"
+                placeholder="Leave blank to keep unchanged"
+                value={editTenant.jwApiSecret}
+                onChange={e => setEditTenant({ ...editTenant, jwApiSecret: e.target.value })} />
+              <Typography sx={{ fontSize: '0.68rem', color: AP.muted }}>
+                The current secret is never shown here — leave it blank to keep the existing one.
+              </Typography>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setEditTenant(null)} sx={{ color: '#a8bcd4' }}>Cancel</Button>
+          <Button onClick={handleEditSave} disabled={editSaving} variant="contained"
+            sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
+            {editSaving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  )
+}
+
+// ─── Super Admins (Super Admin only, global) ─────────────────────────────────
+
+function SuperAdminsPanel({ token }) {
+  const [admins, setAdmins]   = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState({ email: '', password: '' })
+  const [saving, setSaving] = useState(false)
+
+  const fetchAdmins = useCallback(() => {
+    setLoading(true)
+    fetch('/api/super-admins', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : { superAdmins: [] })
+      .then(data => setAdmins(data.superAdmins || []))
+      .catch(() => setAdmins([]))
+      .finally(() => setLoading(false))
+  }, [token])
+
+  useEffect(() => { fetchAdmins() }, [fetchAdmins])
+
+  async function handleAdd(e) {
+    e.preventDefault()
+    setSaving(true); setError('')
+    try {
+      const res = await fetch('/api/super-admins', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to add Super Admin')
+      setForm({ email: '', password: '' })
+      setShowForm(false)
+      fetchAdmins()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleRevoke(userId, email) {
+    if (!confirm(`Revoke Super Admin access for ${email}?`)) return
+    const res = await fetch('/api/super-admins', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    })
+    if (res.ok) fetchAdmins()
+    else { const data = await res.json(); alert(data.error || 'Failed to revoke') }
+  }
+
+  return (
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5, maxWidth: 560 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+        <Typography sx={{ fontWeight: 700, fontSize: '1rem', color: '#fff' }}>Super Admins</Typography>
+        <Button size="small" startIcon={<AddIcon />} onClick={() => setShowForm(v => !v)} sx={{ fontSize: '0.72rem', color: AP.accent }}>
+          {showForm ? 'Cancel' : 'Add Super Admin'}
+        </Button>
+      </Box>
+      <Typography sx={{ fontSize: '0.72rem', color: AP.muted, mb: 2 }}>
+        Trilogy Digital agency staff only — full access across every tenant, plus Costs/Pricing and the ability to create new tenants.
+      </Typography>
+
+      {showForm && (
+        <Box component="form" onSubmit={handleAdd} sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
+          <TextField size="small" type="email" label="Email" required value={form.email}
+            onChange={e => setForm({ ...form, email: e.target.value })} sx={{ minWidth: 180 }} />
+          <TextField size="small" type="password" label="Password (new users only)" value={form.password}
+            onChange={e => setForm({ ...form, password: e.target.value })} sx={{ minWidth: 200 }} />
+          <Button type="submit" variant="contained" disabled={saving} size="small"
+            sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
+            {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : 'Grant'}
+          </Button>
+        </Box>
+      )}
+      {error && <Alert severity="error" sx={{ mb: 2, fontSize: '0.78rem' }}>{error}</Alert>}
+
+      {loading ? (
+        <CircularProgress size={20} sx={{ color: AP.accent }} />
+      ) : (
+        <Table size="small">
+          <TableBody>
+            {admins.map(a => (
+              <TableRow key={a.id}>
+                <TableCell sx={{ fontSize: '0.8rem', color: '#e2e8f0' }}>{a.email}</TableCell>
+                <TableCell align="right">
+                  <IconButton size="small" onClick={() => handleRevoke(a.id, a.email)} sx={{ color: 'rgba(248,113,113,0.5)' }}>
+                    <DeleteIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </Box>
+  )
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
-function Dashboard({ token, onLogout }) {
+// Map pathname → { activeTab, dashboardView }
+const PATH_MAP = {
+  '/admin/streams':     { activeTab: 'dashboard',    dashboardView: 'streams' },
+  '/admin/events':      { activeTab: 'dashboard',    dashboardView: 'events'  },
+  '/admin/encoders':    { activeTab: 'encoders',     dashboardView: 'streams' },
+  '/admin/costs':       { activeTab: 'costs',        dashboardView: 'streams' },
+  '/admin/settings':    { activeTab: 'settings',     dashboardView: 'streams' },
+  '/admin/tenants':     { activeTab: 'tenants',      dashboardView: 'streams' },
+  '/admin/superadmins': { activeTab: 'superadmins',  dashboardView: 'streams' },
+}
+// Map { tab, view } → canonical path
+function tabToPath(tab, view) {
+  if (tab === 'dashboard')   return view === 'events' ? '/admin/events' : '/admin/streams'
+  if (tab === 'encoders')    return '/admin/encoders'
+  if (tab === 'costs')       return '/admin/costs'
+  if (tab === 'settings')    return '/admin/settings'
+  if (tab === 'tenants')     return '/admin/tenants'
+  if (tab === 'superadmins') return '/admin/superadmins'
+  return '/admin/streams'
+}
+
+function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tenants, onSwitchTenant, onLogout }) {
+  const navigate   = useNavigate()
+  const location   = useLocation()
+  const { tenant } = useTenant()
+  const TZ         = tenant?.timezone || 'America/New_York'
+  const tzLabel    = getTzLabel(TZ)
   const [tournaments, setTournaments] = useState([])
   const [channels, setChannels] = useState([])
   const [loadingTournaments, setLoadingTournaments] = useState(true)
@@ -2721,9 +4416,9 @@ function Dashboard({ token, onLogout }) {
   const [createStreamOpen, setCreateStreamOpen] = useState(false)
   const [createStreamKey, setCreateStreamKey]   = useState(0)
   const [selectedChannel, setSelectedChannel]   = useState(null)
-  const [activeTab, setActiveTab] = useState('dashboard')
-  const [dashboardView, setDashboardView] = useState('both')
-  const [streamFilter, setStreamFilter] = useState('all')
+  const { activeTab, dashboardView } = PATH_MAP[location.pathname] || { activeTab: 'dashboard', dashboardView: 'streams' }
+  const [streamFilter,     setStreamFilter]     = useState('all')
+  const [streamTypeFilter, setStreamTypeFilter] = useState('all')
   const [previewDialog, setPreviewDialog] = useState({ open: false, channelName: '', streamUrl: '' })
   const [snack, setSnack] = useState({ open: false, message: '', severity: 'success' })
 
@@ -2733,7 +4428,7 @@ function Dashboard({ token, onLogout }) {
   const fetchTournaments = useCallback(async () => {
     setLoadingTournaments(true)
     try {
-      const res = await fetch('/api/tournaments')
+      const res = await fetch('/api/tournaments', { headers: { 'X-Tenant-Id': tenantId } })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to load tournaments')
       setTournaments(data)
@@ -2748,7 +4443,7 @@ function Dashboard({ token, onLogout }) {
     setLoadingChannels(true)
     setChannelError('')
     try {
-      const res = await fetch('/api/channels', { headers: authHeader(token) })
+      const res = await fetch('/api/channels', { headers: authHeader(token, tenantId) })
       if (res.status === 401) { onLogout(); return }
       const data = await res.json()
       if (!res.ok) throw new Error(`${data.error}${data.detail ? ` — ${data.detail}` : ''}`)
@@ -2762,21 +4457,21 @@ function Dashboard({ token, onLogout }) {
 
   const fetchCostRecords = useCallback(async () => {
     try {
-      const res = await fetch('/api/cost-records')
+      const res = await fetch('/api/cost-records', { headers: { Authorization: `Bearer ${token}` } })
       if (res.ok) setCostRecords(await res.json())
     } catch {}
-  }, [])
+  }, [token])
 
   const fetchCdnData = useCallback(async () => {
     try {
       const [cRes, pRes] = await Promise.all([
-        fetch('/api/cdn-records'),
-        fetch('/api/pricing'),
+        fetch('/api/cdn-records', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/pricing',     { headers: { Authorization: `Bearer ${token}` } }),
       ])
       if (cRes.ok) setCdnRecords(await cRes.json())
       if (pRes.ok) setCdnPricing(await pRes.json())
     } catch {}
-  }, [])
+  }, [token])
 
   useEffect(() => {
     fetchTournaments()
@@ -2785,13 +4480,83 @@ function Dashboard({ token, onLogout }) {
     fetchCdnData()
   }, [fetchTournaments, fetchChannels, fetchCostRecords, fetchCdnData])
 
+  // ── Handle ?yt=, ?fb= URL params after OAuth redirects ──────────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const yt = params.get('yt')
+    const fb = params.get('fb')
+    if (yt === 'connected') showSnack('YouTube connected successfully!', 'success')
+    if (yt === 'error') {
+      const msg = params.get('msg')
+      showSnack(msg ? `YouTube error: ${msg}` : 'YouTube connection failed. Check console.', 'error')
+    }
+    if (fb === 'connected')  showSnack('Facebook Page connected successfully!', 'success')
+    if (fb === 'no_pages')   showSnack('Facebook connected but no Pages found. Make sure you manage a Facebook Page.', 'warning')
+    if (fb === 'error') {
+      const msg = params.get('msg')
+      showSnack(msg ? `Facebook error: ${msg}` : 'Facebook connection failed. Check console.', 'error')
+    }
+    // Clean up query params without reloading
+    if (yt || fb) navigate(location.pathname, { replace: true })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Background VOD expiry sweeper ─────────────────────────────────────────────
+  // Runs immediately on load, then every hour. Any past downloadable stream whose
+  // stream_end is ≥ VOD_TTL_DAYS old has its JW VOD media asset deleted.
+  // The channel row stays in the list for historical reference — only the
+  // downloadable VOD media is removed from JW.
+  useEffect(() => {
+    if (!token) return
+
+    async function sweepExpiredVods(currentChannels) {
+      const expired = (currentChannels || []).filter(
+        ch => ch.enable_live_to_vod &&
+              resolveIdleStatus(ch) === 'past' && isVodExpired(ch)
+      )
+      if (!expired.length) return
+
+      console.log(`[VOD sweep] Found ${expired.length} expired VOD(s), removing JW media…`)
+      await Promise.allSettled(
+        expired.map(ch =>
+          fetch('/api/delete-vod-media', {
+            method: 'DELETE',
+            headers: authHeader(token, tenantId),
+            body: JSON.stringify({ media_id: ch.vod_media_id }),
+          })
+            .then(r => r.json())
+            .then(data => {
+              if (data.ok) {
+                console.log(`[VOD sweep] Removed VOD media for ${ch.name || ch.id}`)
+                // Keep the channel in the list — just clear the VOD fields so the
+                // download card/icon no longer shows
+                setChannels(prev => prev.map(c =>
+                  c.id === ch.id ? { ...c, enable_live_to_vod: false, vod_media_id: null } : c
+                ))
+              }
+            })
+            .catch(err => console.error(`[VOD sweep] Failed for ${ch.id}:`, err))
+        )
+      )
+    }
+
+    // Run immediately with current channels snapshot
+    setChannels(prev => { sweepExpiredVods(prev); return prev })
+
+    // Then re-run every hour
+    const intervalId = setInterval(() => {
+      setChannels(prev => { sweepExpiredVods(prev); return prev })
+    }, 60 * 60 * 1000)
+
+    return () => clearInterval(intervalId)
+  }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Cost record CRUD ──────────────────────────────────────────────────────────
 
   async function saveCostRecord(form) {
     const isEdit = !!costRecordDialog.initial?.id
     const res = await fetch('/api/cost-records', {
       method: isEdit ? 'PUT' : 'POST',
-      headers: authHeader(token),
+      headers: authHeader(token, tenantId),
       body: JSON.stringify(isEdit ? { id: costRecordDialog.initial.id, ...form } : form),
     })
     const data = await res.json()
@@ -2804,7 +4569,7 @@ function Dashboard({ token, onLogout }) {
     try {
       const res = await fetch('/api/cost-records', {
         method: 'DELETE',
-        headers: authHeader(token),
+        headers: authHeader(token, tenantId),
         body: JSON.stringify({ id }),
       })
       if (!res.ok) throw new Error((await res.json()).error)
@@ -2821,7 +4586,7 @@ function Dashboard({ token, onLogout }) {
     const isEdit = !!tournamentDialog.initial?.id
     const res = await fetch('/api/tournaments', {
       method: isEdit ? 'PUT' : 'POST',
-      headers: authHeader(token),
+      headers: authHeader(token, tenantId),
       body: JSON.stringify(isEdit ? { id: tournamentDialog.initial.id, ...eventForm } : eventForm),
     })
     const data = await res.json()
@@ -2836,7 +4601,7 @@ function Dashboard({ token, onLogout }) {
         const streams = (sessData.streams || []).filter(s => s.url || s.name)
         const sessRes = await fetch('/api/tournament-days', {
           method: _existingId ? 'PUT' : 'POST',
-          headers: authHeader(token),
+          headers: authHeader(token, tenantId),
           body: JSON.stringify({
             tournament_id: data.id,
             ...(_existingId ? { id: _existingId } : {}),
@@ -2860,7 +4625,7 @@ function Dashboard({ token, onLogout }) {
     try {
       const res = await fetch('/api/tournaments', {
         method: 'DELETE',
-        headers: authHeader(token),
+        headers: authHeader(token, tenantId),
         body: JSON.stringify({ id: tournament.id }),
       })
       const data = await res.json()
@@ -2879,7 +4644,7 @@ function Dashboard({ token, onLogout }) {
     const isEdit = !!dayDialog.initial?.id
     const res = await fetch('/api/tournament-days', {
       method: isEdit ? 'PUT' : 'POST',
-      headers: authHeader(token),
+      headers: authHeader(token, tenantId),
       body: JSON.stringify({
         tournament_id: tournament.id,
         ...(isEdit ? { id: dayDialog.initial.id } : {}),
@@ -2897,7 +4662,7 @@ function Dashboard({ token, onLogout }) {
     try {
       const res = await fetch('/api/tournament-days', {
         method: 'DELETE',
-        headers: authHeader(token),
+        headers: authHeader(token, tenantId),
         body: JSON.stringify({ tournament_id: tournament.id, id: day.id }),
       })
       const data = await res.json()
@@ -2935,7 +4700,7 @@ function Dashboard({ token, onLogout }) {
       }
       const res = await fetch('/api/tournament-days', {
         method: 'PUT',
-        headers: authHeader(token),
+        headers: authHeader(token, tenantId),
         body: JSON.stringify({
           tournament_id: tournamentId,
           id: day.id,
@@ -2957,44 +4722,61 @@ function Dashboard({ token, onLogout }) {
 
   // ── JW channel management ─────────────────────────────────────────────────────
 
-  async function deleteChannel(id, name) {
+  async function deleteChannel(id, name, youtubeBroadcastId, youtubeStreamId, facebookLiveVideoId) {
     if (!confirm(`Destroy stream "${name}"?\n\nThis cannot be undone.`)) return
     try {
       const res = await fetch('/api/delete-stream', {
         method: 'DELETE',
-        headers: authHeader(token),
-        body: JSON.stringify({ id }),
+        headers: authHeader(token, tenantId),
+        body: JSON.stringify({
+          id,
+          name,
+          ...(youtubeBroadcastId   ? { youtube_broadcast_id:   youtubeBroadcastId   } : {}),
+          ...(youtubeStreamId      ? { youtube_stream_id:      youtubeStreamId      } : {}),
+          ...(facebookLiveVideoId  ? { facebook_live_video_id: facebookLiveVideoId  } : {}),
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(`${data.error}${data.detail ? ` — ${data.detail}` : ''}`)
-      await fetchChannels()
+      // Optimistically remove from state immediately — JW propagation can lag
+      setChannels(prev => prev.filter(ch => ch.id !== id))
+      // Background refresh to stay in sync with JW
+      fetchChannels()
     } catch (err) {
       alert(`Failed to delete stream: ${err.message}`)
     }
   }
 
   // ── Stats helpers ────────────────────────────────────────────────────────────
-  const liveNow = channels.filter(ch => ch.status === 'active').length
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+  const liveNow = channels.filter(ch => ['active','streaming'].includes(ch.status)).length
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: TZ })
   const sessionsToday = tournaments.reduce((sum, t) => sum + (t.days || []).filter(d => d.date === todayStr).length, 0)
   const totalCdnCost = cdnRecords.reduce((sum, r) => sum + (r.cost_total || 0), 0)
 
+  const isReadOnly = tenantRole === 'read_only'
+
   const NAV_ITEMS = [
     { section: 'MANAGEMENT', items: [
-      { label: 'Events',       tab: 'dashboard', view: 'events',  count: tournaments.length },
-      { label: 'Live Streams', tab: 'dashboard', view: 'streams', count: channels.length },
+      { label: 'Live Streams',    tab: 'dashboard', view: 'streams', count: channels.length },
+      ...(isReadOnly ? [] : [{ label: 'Events', tab: 'dashboard', view: 'events', count: tournaments.length }]),
+      { label: 'Encoder Control', tab: 'encoders',  view: null },
     ]},
-    { section: 'FINANCE', items: [
-      { label: 'Costs', tab: 'costs', view: null },
-    ]},
-    { section: 'SYSTEM', items: [
+    ...(isReadOnly ? [] : [{ section: 'SYSTEM', items: [
       { label: 'Settings', tab: 'settings', view: null },
-    ]},
+    ]}]),
+    ...(isSuperAdmin ? [
+      { section: 'FINANCE', items: [
+        { label: 'Costs', tab: 'costs', view: null },
+      ]},
+      { section: 'PLATFORM', items: [
+        { label: 'Tenants',      tab: 'tenants',     view: null, count: tenants?.length },
+        { label: 'Super Admins', tab: 'superadmins', view: null },
+      ]},
+    ] : []),
   ]
 
   function navClick(tab, view) {
-    setActiveTab(tab)
-    if (view) setDashboardView(view)
+    navigate(tabToPath(tab, view))
   }
 
   function isNavActive(tab, view) {
@@ -3009,37 +4791,40 @@ function Dashboard({ token, onLogout }) {
       <Box height={48} display="flex" alignItems="center" px={2} gap={1.5}
         sx={{ borderBottom: '1px solid rgba(255,255,255,0.06)', bgcolor: '#0a0f1a', flexShrink: 0, zIndex: 10 }}
       >
-        {/* Topbar logo — B */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <svg width="26" height="26" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="22" cy="22" r="18" stroke="rgba(99,102,241,0.3)" strokeWidth="1.5"/>
-            <circle cx="22" cy="22" r="12" stroke="rgba(99,102,241,0.55)" strokeWidth="1.5"/>
-            <path d="M18 15.5l11 6.5-11 6.5V15.5z" fill="#6366f1"/>
-          </svg>
-          <Box sx={{ fontFamily: "'Poppins', sans-serif", fontWeight: 800, fontSize: '0.9rem', letterSpacing: '-0.01em', color: '#fff', lineHeight: 1 }}>
-            Event<Box component="span" sx={{ color: AP.accent }}>Hub</Box>
-          </Box>
-          <Box component="span" sx={{
-            display: 'inline-flex', alignItems: 'center', gap: '3px',
-            bgcolor: '#ef4444', borderRadius: '3px', px: '5px', py: '1px',
-            fontSize: '0.5rem', fontWeight: 800, letterSpacing: '0.1em', color: '#fff',
-          }}>
-            <Box component="span" sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#fff',
-              '@keyframes pulse': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.4 } },
-              animation: 'pulse 1.4s ease-in-out infinite', flexShrink: 0,
-            }}/>
-            LIVE
-          </Box>
-        </Box>
+        {/* Topbar logo */}
+        <EHLLogo size={20} dark animate />
         <Typography variant="caption" sx={{ color: '#334155', fontSize: '0.7rem' }}>Admin</Typography>
+        {tenantName && (
+          <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem' }}>· {tenantName}</Typography>
+        )}
+        {isSuperAdmin && (
+          <Chip label="SUPER ADMIN" size="small"
+            sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.35)' }} />
+        )}
+        {isReadOnly && (
+          <Chip label="READ-ONLY" size="small"
+            sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(148,163,184,0.12)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.3)' }} />
+        )}
         {liveNow > 0 && (
           <Chip label={`${liveNow} LIVE`} size="small"
             sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: AP.liveDim, color: AP.live, border: `1px solid ${AP.liveBdr}` }} />
         )}
         <Box ml="auto" display="flex" gap={1} alignItems="center">
-          <Tooltip title="Go to live site">
-            <Button component="a" href="/" size="small" sx={{ color: '#a8bcd4', fontSize: '0.72rem' }}>Live Site</Button>
-          </Tooltip>
+          {tenants && tenants.length > 1 && (
+            <TextField
+              select
+              size="small"
+              value={tenantId}
+              onChange={e => onSwitchTenant?.(e.target.value)}
+              sx={{
+                '& .MuiInputBase-root': { fontSize: '0.72rem', color: '#a8bcd4', height: 30 },
+                '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.12)' },
+                minWidth: 140,
+              }}
+            >
+              {tenants.map(t => <MenuItem key={t.id} value={t.id} sx={{ fontSize: '0.78rem' }}>{t.name}</MenuItem>)}
+            </TextField>
+          )}
           <Tooltip title="Logout">
             <IconButton onClick={onLogout} sx={{ color: '#a8bcd4' }} size="small">
               <LogoutIcon sx={{ fontSize: 18 }} />
@@ -3110,11 +4895,11 @@ function Dashboard({ token, onLogout }) {
                 ))}
               </Box>
 
-              {/* 2-col content grid */}
-              <Box display="grid" sx={{ gridTemplateColumns: '1fr 1.6fr', gap: 2, p: 2 }}>
+              {/* Single-panel content area — switches based on nav selection */}
+              <Box sx={{ p: 2 }}>
 
                 {/* Events panel */}
-                <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
+                {dashboardView === 'events' && <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
                   <Box sx={{
                     px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     borderBottom: '1px solid rgba(255,255,255,0.07)',
@@ -3172,34 +4957,63 @@ function Dashboard({ token, onLogout }) {
                       ))
                     )}
                   </Box>
-                </Paper>
+                </Paper>}
 
                 {/* Streams panel */}
-                <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
+                {dashboardView === 'streams' && <Box>
                   <Box sx={{
-                    px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    borderBottom: '1px solid rgba(255,255,255,0.07)',
-                    background: `linear-gradient(90deg, ${AP.accentDim} 0%, transparent 60%)`,
+                    px: 1, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
                       <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem' }}>
                         LIVE STREAMS
                       </Typography>
-                      <Box component="select"
-                        value={streamFilter}
-                        onChange={e => setStreamFilter(e.target.value)}
-                        sx={{
-                          bgcolor: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
-                          borderRadius: 1, color: AP.muted, fontSize: '0.7rem', px: 1, py: 0.4,
-                          cursor: 'pointer', outline: 'none',
-                          '&:hover': { borderColor: 'rgba(255,255,255,0.25)' },
-                        }}
-                      >
-                        <option value="all">All</option>
-                        <option value="live">Live</option>
-                        <option value="scheduled">Scheduled</option>
-                        <option value="past">Past</option>
+                      {/* Type filter — Both / Events / 24/7 */}
+                      <Box sx={{ display: 'flex', alignItems: 'center', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5, p: '2px', gap: '2px' }}>
+                        {[
+                          { value: 'all',   label: 'Both'   },
+                          { value: 'event', label: 'Events' },
+                          { value: '24/7',  label: '24/7'   },
+                        ].map(opt => (
+                          <Box
+                            key={opt.value}
+                            onClick={() => {
+                              setStreamTypeFilter(opt.value)
+                              // Reset status filter when switching to 24/7 since those concepts don't apply
+                              if (opt.value === '24/7') setStreamFilter('all')
+                            }}
+                            sx={{
+                              px: 1.25, py: 0.35, borderRadius: 1, cursor: 'pointer',
+                              fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.04em',
+                              transition: 'all 0.15s',
+                              bgcolor: streamTypeFilter === opt.value ? AP.accentDim : 'transparent',
+                              color:   streamTypeFilter === opt.value ? AP.accent    : AP.muted,
+                              border:  streamTypeFilter === opt.value ? `1px solid ${AP.accentBdr}` : '1px solid transparent',
+                              '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.07)' },
+                            }}
+                          >
+                            {opt.label}
+                          </Box>
+                        ))}
                       </Box>
+                      {/* Status filter — hidden for 24/7 since scheduled/past don't apply */}
+                      {streamTypeFilter !== '24/7' && (
+                        <Box component="select"
+                          value={streamFilter}
+                          onChange={e => setStreamFilter(e.target.value)}
+                          sx={{
+                            bgcolor: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: 1, color: AP.muted, fontSize: '0.7rem', px: 1, py: 0.4,
+                            cursor: 'pointer', outline: 'none',
+                            '&:hover': { borderColor: 'rgba(255,255,255,0.25)' },
+                          }}
+                        >
+                          <option value="all">All</option>
+                          <option value="live">Live</option>
+                          <option value="scheduled">Scheduled</option>
+                          <option value="past">Past Event</option>
+                        </Box>
+                      )}
                     </Box>
                     <Box sx={{ display: 'flex', gap: 1 }}>
                       <Tooltip title="Refresh channels">
@@ -3207,15 +5021,17 @@ function Dashboard({ token, onLogout }) {
                           <RefreshIcon sx={{ fontSize: 18 }} />
                         </IconButton>
                       </Tooltip>
-                      <Button
-                        size="small"
-                        startIcon={<LiveTvIcon sx={{ fontSize: '14px !important' }} />}
-                        variant="outlined"
-                        onClick={() => { setCreateStreamKey(k => k + 1); setCreateStreamOpen(true) }}
-                        sx={{ fontSize: '0.72rem', borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent } }}
-                      >
-                        New Live Stream
-                      </Button>
+                      {!isReadOnly && (
+                        <Button
+                          size="small"
+                          startIcon={<LiveTvIcon sx={{ fontSize: '14px !important' }} />}
+                          variant="outlined"
+                          onClick={() => { setCreateStreamKey(k => k + 1); setCreateStreamOpen(true) }}
+                          sx={{ fontSize: '0.72rem', borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent } }}
+                        >
+                          New Live Stream
+                        </Button>
+                      )}
                     </Box>
                   </Box>
 
@@ -3227,30 +5043,39 @@ function Dashboard({ token, onLogout }) {
                 <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
                   <CircularProgress size={28} sx={{ color: AP.accent }} />
                 </Box>
-              ) : channels.length === 0 && !channelError ? (
-                <Typography variant="body2" sx={{ color: '#a8bcd4', textAlign: 'center', py: 3 }}>
-                  No live channels found in your JW account.
-                </Typography>
               ) : (
-                <Table size="small">
-                  <TableHead>
-                    <TableRow sx={{ '& th': { color: '#a8bcd4', fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', borderColor: 'rgba(255,255,255,0.05)' } }}>
-                      <TableCell>CHANNEL</TableCell>
-                      <TableCell>STATUS</TableCell>
-                      <TableCell>DATE</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
+                <>
+                {/* ── Column header bar ── */}
+                <Box sx={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 110px 100px 160px',
+                  px: 1, py: 0.75,
+                  borderBottom: '1px solid rgba(255,255,255,0.04)',
+                }}>
+                  {['Stream title', 'Status', 'Destinations', 'Schedule'].map((col, i) => (
+                    <Typography key={col} sx={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.1em', color: 'rgba(148,163,184,0.5)', textTransform: 'uppercase', textAlign: i === 0 ? 'left' : 'left' }}>
+                      {col}
+                    </Typography>
+                  ))}
+                </Box>
+
+                {/* ── Rows ── */}
+                <Box>
                     {(() => {
                       // ── Status label + color config ──────────────────────────
                       const STATUS_CFG = {
-                        active:     { label: 'Live',      bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
-                        requested:  { label: 'Scheduled', bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
-                        scheduled:  { label: 'Scheduled', bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
-                        creating:   { label: 'Creating',  bg: 'rgba(245,158,11,0.15)',  color: '#f59e0b', border: 'rgba(245,158,11,0.4)'  },
-                        idle:       { label: 'Past',      bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
-                        stopping:   { label: 'Stopping',  bg: 'rgba(239,68,68,0.12)',   color: '#f87171', border: 'rgba(239,68,68,0.35)'  },
-                        destroying: { label: 'Past',      bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
+                        active:     { label: 'Live',       bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
+                        streaming:  { label: 'Live',       bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
+                        requested:  { label: 'Scheduled',  bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
+                        scheduled:  { label: 'Scheduled',  bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
+                        creating:   { label: 'Creating',   bg: 'rgba(245,158,11,0.15)',  color: '#f59e0b', border: 'rgba(245,158,11,0.4)'  },
+                        starting:   { label: 'Starting',   bg: 'rgba(56,189,248,0.12)',  color: '#38bdf8', border: 'rgba(56,189,248,0.35)' },
+                        ready:      { label: 'Ready',      bg: 'rgba(87,187,149,0.15)',  color: '#57BB95', border: 'rgba(87,187,149,0.4)'  },
+                        idle:       { label: 'Past Event', bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
+                        idle_247:   { label: 'Idle',       bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
+                        stopping:   { label: 'Stopping',   bg: 'rgba(239,68,68,0.12)',   color: '#f87171', border: 'rgba(239,68,68,0.35)'  },
+                        destroying: { label: 'Destroying', bg: 'rgba(245,158,11,0.1)',   color: '#f59e0b', border: 'rgba(245,158,11,0.35)' },
+                        deleting:   { label: 'Deleting',   bg: 'rgba(245,158,11,0.1)',   color: '#f59e0b', border: 'rgba(245,158,11,0.35)' },
                       }
 
                       // ── Sort helper (newest first) ───────────────────────────
@@ -3262,14 +5087,19 @@ function Dashboard({ token, onLogout }) {
                         return d !== 0 ? d : (a.name || '').localeCompare(b.name || '')
                       }
 
-                      // ── Enrich CDN-only channels with tournament day times ───
-                      const jwIds = new Set(channels.map(ch => ch.id))
-                      const cdnChannelMap = {}
-                      cdnRecords.forEach(r => {
-                        if (!r.channel_id || jwIds.has(r.channel_id)) return
-                        const existing = cdnChannelMap[r.channel_id]
-                        if (!existing || r.date > existing.date) cdnChannelMap[r.channel_id] = r
-                      })
+                      // ── Enrich CDN records → synthetic past stream rows ──────
+                      // Only skip channels that are currently active/scheduled in JW.
+                      // Idle/past JW channels are included via cdnRecords so each day
+                      // shows as its own row (instead of deduplicating by channel ID).
+                      const jwActiveIds = new Set(
+                        channels
+                          .filter(ch => ['active','requested','scheduled','creating'].includes(ch.status?.toLowerCase()))
+                          .map(ch => ch.id)
+                      )
+                      // Also track JW channel+date combos already represented in the list
+                      const jwDateKeys = new Set(
+                        channels.map(ch => `${ch.id}::${ch.stream_start ? ch.stream_start.slice(0,10) : ''}`)
+                      )
 
                       // Helper: parse "8:00 AM" → decimal hours
                       const parseHr = t => {
@@ -3290,9 +5120,16 @@ function Dashboard({ token, onLogout }) {
                         return d.toISOString()
                       }
 
-                      const syntheticPast = Object.values(cdnChannelMap).map(r => {
+                      const syntheticPast = []
+                      cdnRecords.forEach(r => {
+                        if (!r.channel_id) return
+                        // Skip if channel is currently live/scheduled in JW
+                        if (jwActiveIds.has(r.channel_id)) return
+                        // Skip if JW already has this channel on this same date
+                        if (jwDateKeys.has(`${r.channel_id}::${r.date || ''}`)) return
+
                         // Find the tournament day that matches this channel + date
-                        let dayStart = null, dayEnd = null
+                        let dayStart = null, dayEnd = null, dayLabel = null
                         for (const t of tournaments) {
                           for (const d of (t.days || [])) {
                             if (d.date !== r.date) continue
@@ -3300,32 +5137,61 @@ function Dashboard({ token, onLogout }) {
                             if (urls.some(u => u.includes(r.channel_id))) {
                               dayStart = toIso(d.date, d.start_time)
                               dayEnd   = toIso(d.date, d.end_time)
+                              dayLabel = d.label || null
                               break
                             }
                           }
                           if (dayStart) break
                         }
-                        return {
+
+                        syntheticPast.push({
                           id:           r.channel_id,
+                          _cdnDate:     r.date,           // used for unique row key
                           name:         r.channel_name,
                           status:       'idle',
-                          stream_type:  null,
+                          stream_type:  'event',
                           stream_url:   null,
-                          stream_start: dayStart || (r.date ? `${r.date}T00:00:00` : null),
-                          stream_end:   dayEnd,
+                          stream_start: dayStart || (r.date ? `${r.date}T09:00:00` : null),
+                          stream_end:   dayEnd   || (r.date ? `${r.date}T18:00:00` : null),
                           ingest_url:   null,
                           ingest_key:   null,
                           _fromCdn:     true,
-                        }
+                          _cdnLabel:    dayLabel || r.label || null,
+                        })
                       })
+
+                      // ── TEST ONLY — remove after verifying download card ─────
+                      syntheticPast.push({
+                        id:              'QX6C9TkF',
+                        _cdnDate:        '2026-04-07',
+                        name:            'Live Event Test',
+                        status:          'idle',
+                        stream_type:     'event',
+                        stream_url:      null,
+                        stream_start:    '2026-04-07T14:00:00Z',
+                        stream_end:      '2026-04-07T15:00:00Z',
+                        enable_live_to_vod: true,
+                        ingest_url:      null,
+                        ingest_key:      null,
+                        _fromCdn:        true,
+                      })
+                      // ── END TEST ─────────────────────────────────────────────
 
                       // ── Build full list and apply filter ─────────────────────
                       const allChannels = [...channels, ...syntheticPast].sort(sortByStart)
                       const filterGroup = ch => {
+                        // Type filter
+                        if (streamTypeFilter === 'event' && ch.stream_type !== 'event') return false
+                        if (streamTypeFilter === '24/7'  && ch.stream_type !== '24/7')  return false
+                        // Status filter
                         const s = ch.status?.toLowerCase()
-                        if (streamFilter === 'live')      return s === 'active'
-                        if (streamFilter === 'scheduled') return ['requested','scheduled','creating'].includes(s)
-                        if (streamFilter === 'past')      return ['idle','stopping','destroying'].includes(s)
+                        if (streamFilter === 'live')      return s === 'active' || s === 'streaming'
+                        if (streamFilter === 'scheduled') return ['requested','scheduled','creating','starting','ready','preview'].includes(s)
+                        if (streamFilter === 'past') {
+                          if (['stopping','destroying','deleting'].includes(s)) return true
+                          if (s === 'idle') return ch.stream_type === '24/7' ? false : resolveIdleStatus(ch) === 'past'
+                          return false
+                        }
                         return true
                       }
                       const visibleChannels = allChannels.filter(filterGroup)
@@ -3335,7 +5201,7 @@ function Dashboard({ token, onLogout }) {
                         if (!iso) return null
                         return new Date(iso).toLocaleString('en-US', {
                           month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-                          timeZone: 'America/New_York',
+                          timeZone: TZ,
                         })
                       }
                       const fmtWindow = (startIso, endIso) => {
@@ -3343,101 +5209,241 @@ function Dashboard({ token, onLogout }) {
                         const e = fmtTime(endIso)
                         if (!s && !e) return '—'
                         // If same calendar day, show date once: "Apr 24 · 8:00 AM – 5:00 PM ET"
-                        const sDate = startIso ? new Date(startIso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' }) : null
-                        const eDate = endIso   ? new Date(endIso).toLocaleDateString('en-US',   { month: 'short', day: 'numeric', timeZone: 'America/New_York' }) : null
+                        const sDate = startIso ? new Date(startIso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: TZ }) : null
+                        const eDate = endIso   ? new Date(endIso).toLocaleDateString('en-US',   { month: 'short', day: 'numeric', timeZone: TZ }) : null
                         if (s && e && sDate === eDate) {
                           const sTime = s.replace(/^[A-Za-z]+ \d+,?\s*/, '')
                           const eTime = e.replace(/^[A-Za-z]+ \d+,?\s*/, '')
-                          return { date: sDate, range: `${sTime} – ${eTime} ET` }
+                          return { date: sDate, range: `${sTime} – ${eTime} ${tzLabel}` }
                         }
-                        if (s && e) return { date: null, range: `${s} – ${e} ET` }
-                        if (s)      return { date: null, range: `${s} ET` }
-                        return       { date: null, range: `– ${e} ET` }
+                        if (s && e) return { date: null, range: `${s} – ${e} ${tzLabel}` }
+                        if (s)      return { date: null, range: `${s} ${tzLabel}` }
+                        return       { date: null, range: `– ${e} ${tzLabel}` }
                       }
 
                       if (visibleChannels.length === 0) return (
-                        <TableRow>
-                          <TableCell colSpan={5} sx={{ textAlign: 'center', py: 3 }}>
-                            <Typography variant="body2" sx={{ color: AP.muted, fontStyle: 'italic' }}>
-                              No streams match the selected filter.
-                            </Typography>
-                          </TableCell>
-                        </TableRow>
+                        <Box sx={{ textAlign: 'center', py: 5 }}>
+                          <Typography sx={{ color: AP.muted, fontStyle: 'italic', fontSize: '0.82rem' }}>
+                            No streams match the selected filter.
+                          </Typography>
+                        </Box>
                       )
 
                       return visibleChannels.map(ch => {
-                        const cfg          = STATUS_CFG[ch.status?.toLowerCase()] || STATUS_CFG.idle
+                        const s = ch.status?.toLowerCase()
+                        const cfgKey = (s === 'idle' || !STATUS_CFG[s])
+                          ? (ch.stream_type === '24/7' ? 'idle_247' : resolveIdleStatus(ch) === 'upcoming' ? 'scheduled' : 'idle')
+                          : s
+                        const cfg          = STATUS_CFG[cfgKey] || STATUS_CFG.idle
                         const spinupStatus = getSpinupStatus(ch)
-                        return (
-                        <TableRow
-                          key={ch.id + (ch._fromCdn ? '-cdn' : '')}
-                          onClick={() => setSelectedChannel(ch)}
-                          sx={{ cursor: 'pointer', '& td': { borderColor: 'rgba(255,255,255,0.05)', py: 1.25 }, '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}
-                        >
-                          <TableCell>
-                            <Typography variant="body2" sx={{ fontWeight: 600, color: '#fff' }}>{ch.name}</Typography>
-                            <Typography variant="caption" sx={{ color: 'rgba(168,188,212,0.5)', fontFamily: 'monospace', fontSize: '0.62rem' }}>
-                              {ch.id}{ch.stream_type ? ` · ${ch.stream_type}` : ''}
-                            </Typography>
-                          </TableCell>
-                          <TableCell>
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-start' }}>
-                              <Box sx={{
-                                display: 'inline-flex', alignItems: 'center', px: '6px',
-                                height: 18, borderRadius: '4px',
-                                fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.04em',
-                                backgroundColor: cfg.bg, color: cfg.color,
-                                border: `1px solid ${cfg.border}`,
-                                lineHeight: 1,
-                              }}>
-                                {cfg.label}
-                              </Box>
-                              {spinupStatus === 'starting_soon' && (
-                                <Box sx={{ display: 'inline-flex', alignItems: 'center', px: '6px', height: 16, borderRadius: '4px', fontSize: '0.57rem', fontWeight: 700, backgroundColor: AP.warnDim, color: AP.warn, border: `1px solid rgba(245,158,11,0.4)`, lineHeight: 1 }}>Starting Soon</Box>
-                              )}
-                              {spinupStatus === 'winding_down' && (
-                                <Box sx={{ display: 'inline-flex', alignItems: 'center', px: '6px', height: 16, borderRadius: '4px', fontSize: '0.57rem', fontWeight: 700, backgroundColor: AP.slateDim, color: AP.slate, border: `1px solid rgba(100,116,139,0.4)`, lineHeight: 1 }}>Winding Down</Box>
-                              )}
-                            </Box>
-                          </TableCell>
-                          <TableCell>
-                            {(() => {
-                              const w = fmtWindow(ch.stream_start, ch.stream_end)
-                              if (w === '—') return <Typography variant="caption" sx={{ color: 'rgba(168,188,212,0.3)', fontSize: '0.68rem' }}>—</Typography>
+                        const isLiveNow    = s === 'active' || s === 'streaming'
+                        const is247        = ch.stream_type === '24/7'
+
+                        // ── Thumbnail icon ──────────────────────────────────────
+                        const thumbIcon = is247
+                          ? <AllInclusiveIcon sx={{ fontSize: 17, opacity: 0.7 }} />
+                          : <EventIcon       sx={{ fontSize: 17, opacity: 0.7 }} />
+                        const thumbBg = isLiveNow
+                          ? 'rgba(16,185,129,0.18)'
+                          : cfgKey === 'scheduled' ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.06)'
+                        const thumbBorder = isLiveNow
+                          ? 'rgba(16,185,129,0.35)'
+                          : cfgKey === 'scheduled' ? 'rgba(99,102,241,0.3)' : 'rgba(255,255,255,0.1)'
+                        const thumbColor = isLiveNow
+                          ? '#10b981'
+                          : cfgKey === 'scheduled' ? AP.accent : AP.muted
+
+                        // ── Schedule cell content ───────────────────────────────
+                        const scheduleCell = (() => {
+                          if (is247 && isLiveNow) {
+                            const startIso = ch.stream_start || ch.created_at
+                            if (startIso) {
+                              const d = new Date(startIso)
                               return (
                                 <Box>
-                                  {w.date && <Typography variant="caption" sx={{ color: '#fff', fontSize: '0.68rem', display: 'block', fontWeight: 600 }}>{w.date}</Typography>}
-                                  <Typography variant="caption" sx={{ color: '#a8bcd4', fontSize: '0.68rem', whiteSpace: 'nowrap' }}>{w.range}</Typography>
+                                  <Typography sx={{ color: AP.muted, fontSize: '0.58rem', letterSpacing: '0.07em', textTransform: 'uppercase', fontWeight: 700, lineHeight: 1.2 }}>Started</Typography>
+                                  <Typography sx={{ color: '#e2e8f0', fontSize: '0.72rem', fontWeight: 600 }}>{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: TZ })}</Typography>
+                                  <Typography sx={{ color: AP.muted, fontSize: '0.68rem' }}>{d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ })} {tzLabel}</Typography>
                                 </Box>
                               )
-                            })()}
-                          </TableCell>
-                        </TableRow>
-                      )
+                            }
+                            return <Typography sx={{ color: AP.muted, fontSize: '0.72rem' }}>24/7 Live</Typography>
+                          }
+                          if (is247 && ch.created_at) {
+                            return (
+                              <Box>
+                                <Typography sx={{ color: AP.muted, fontSize: '0.58rem', letterSpacing: '0.07em', textTransform: 'uppercase', fontWeight: 700, lineHeight: 1.2 }}>Created</Typography>
+                                <Typography sx={{ color: '#e2e8f0', fontSize: '0.72rem', fontWeight: 600 }}>{new Date(ch.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: TZ })}</Typography>
+                              </Box>
+                            )
+                          }
+                          const w = fmtWindow(ch.stream_start, ch.stream_end)
+                          if (w === '—') return <Typography sx={{ color: 'rgba(168,188,212,0.25)', fontSize: '0.72rem' }}>—</Typography>
+                          return (
+                            <Box>
+                              {w.date && <Typography sx={{ color: '#e2e8f0', fontSize: '0.72rem', fontWeight: 600, lineHeight: 1.3 }}>{w.date}</Typography>}
+                              <Typography sx={{ color: AP.muted, fontSize: '0.68rem', whiteSpace: 'nowrap' }}>{w.range}</Typography>
+                            </Box>
+                          )
+                        })()
+
+                        return (
+                          <Box
+                            key={ch._fromCdn ? `cdn-${ch.id}-${ch._cdnDate}` : ch.id}
+                            onClick={() => navigate(`/admin/stream/${ch.id}`, { state: { channel: ch } })}
+                            sx={{
+                              display: 'grid',
+                              gridTemplateColumns: '1fr 110px 100px 160px',
+                              alignItems: 'center',
+                              px: 1, py: 1.25,
+                              cursor: 'pointer',
+                              borderBottom: '1px solid rgba(255,255,255,0.04)',
+                              transition: 'background 0.12s',
+                              '&:last-child': { borderBottom: 'none' },
+                              '&:hover': { bgcolor: 'rgba(255,255,255,0.025)', borderRadius: 1.5 },
+                            }}
+                          >
+                            {/* ── Title cell ── */}
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+                              {/* Thumbnail */}
+                              <Box sx={{
+                                width: 44, height: 34, borderRadius: 1.5, flexShrink: 0,
+                                bgcolor: thumbBg, border: `1px solid ${thumbBorder}`,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                color: thumbColor, position: 'relative', overflow: 'hidden',
+                              }}>
+                                {thumbIcon}
+                                {isLiveNow && (
+                                  <Box sx={{
+                                    position: 'absolute', bottom: 3, right: 4,
+                                    width: 5, height: 5, borderRadius: '50%', bgcolor: '#10b981',
+                                    boxShadow: '0 0 4px #10b981',
+                                    animation: 'liveDotList 1.8s ease-in-out infinite',
+                                    '@keyframes liveDotList': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.3 } },
+                                  }} />
+                                )}
+                              </Box>
+
+                              {/* Name + meta */}
+                              <Box sx={{ minWidth: 0 }}>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                                  <Typography sx={{ fontWeight: 600, fontSize: '0.85rem', color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 340 }}>
+                                    {ch.name}
+                                  </Typography>
+                                  {ch.enable_live_to_vod && (
+                                    <Tooltip title={isVodExpired(ch) ? 'Recording expired' : 'Downloadable recording'}>
+                                      <DownloadIcon sx={{ fontSize: 12, color: isVodExpired(ch) ? AP.muted : AP.live, flexShrink: 0 }} />
+                                    </Tooltip>
+                                  )}
+                                </Box>
+                                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(148,163,184,0.4)', fontFamily: 'monospace', mt: '1px' }}>
+                                  {ch.id.slice(0, 8)}… · {is247 ? '24/7' : 'Event'}
+                                </Typography>
+                              </Box>
+                            </Box>
+
+                            {/* ── Status cell ── */}
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                              {!spinupStatus && (
+                                <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, px: '7px', height: 20, borderRadius: '5px', fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.04em', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, lineHeight: 1, width: 'fit-content' }}>
+                                  {isLiveNow && <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: cfg.color, flexShrink: 0 }} />}
+                                  {cfg.label}
+                                </Box>
+                              )}
+                              {spinupStatus === 'starting_soon' && <Box sx={{ display: 'inline-flex', alignItems: 'center', px: '7px', height: 20, borderRadius: '5px', fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.04em', backgroundColor: AP.warnDim, color: AP.warn, border: `1px solid rgba(245,158,11,0.4)`, lineHeight: 1, width: 'fit-content' }}>Starting Soon</Box>}
+                              {spinupStatus === 'winding_down' && <Box sx={{ display: 'inline-flex', alignItems: 'center', px: '7px', height: 20, borderRadius: '5px', fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.04em', backgroundColor: AP.slateDim, color: AP.slate, border: `1px solid rgba(100,116,139,0.4)`, lineHeight: 1, width: 'fit-content' }}>Winding Down</Box>}
+                            </Box>
+
+                            {/* ── Destinations cell ── */}
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                              {ch.youtube_broadcast_id && (
+                                <Tooltip title="YouTube">
+                                  <Box component="img" src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg" sx={{ width: 18, height: 18, opacity: 0.85, flexShrink: 0 }} />
+                                </Tooltip>
+                              )}
+                              {ch.facebook_live_video_id && (
+                                <Tooltip title="Facebook">
+                                  <Box sx={{ width: 18, height: 18, borderRadius: '4px', bgcolor: '#1877F2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: 0.85 }}>
+                                    <Box component="svg" viewBox="0 0 24 24" sx={{ width: 10, height: 10, fill: '#fff' }}>
+                                      <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
+                                    </Box>
+                                  </Box>
+                                </Tooltip>
+                              )}
+                              {!ch.youtube_broadcast_id && !ch.facebook_live_video_id && (
+                                <Typography sx={{ color: 'rgba(148,163,184,0.25)', fontSize: '0.72rem' }}>—</Typography>
+                              )}
+                            </Box>
+
+                            {/* ── Schedule cell ── */}
+                            {scheduleCell}
+                          </Box>
+                        )
                       })
                     })()}
-                  </TableBody>
-                </Table>
+                  </Box>
+                </>
               )}
-                </Paper>
+                </Box>}
               </Box>
             </>
           )}
 
-          {activeTab === 'costs' && (
+          {activeTab === 'encoders' && (
             <Box sx={{ p: 2 }}>
+              <EncoderControl token={token} tenantId={tenantId} readOnly={tenantRole === 'read_only'} />
+            </Box>
+          )}
+
+          {activeTab === 'costs' && isSuperAdmin && (
+            <Box sx={{ p: 2, pb: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
               <CostsPage
                 tournaments={tournaments}
                 channels={channels}
                 cdnRecords={cdnRecords}
                 cdnPricing={cdnPricing}
               />
+              <CdnRecordsPanel token={token} />
+              <PricingPanel token={token} />
             </Box>
           )}
 
-          {activeTab === 'settings' && (
+          {activeTab === 'settings' && !isReadOnly && (
+            <Box sx={{ p: 2, pb: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+
+              {/* ── Tenant settings: Branding / Feature Flags / Colors ── */}
+              <TenantSettingsPanel token={token} tenantId={tenantId} />
+
+              {/* ── Team: who has access to this organization ── */}
+              <TenantMembersPanel token={token} tenantId={tenantId} canManage={tenantRole === 'admin' || isSuperAdmin} />
+
+              {/* ── Bottom row: Integrations + Infrastructure side by side ── */}
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' }, gap: 2, alignItems: 'start' }}>
+
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.1em', color: AP.muted, textTransform: 'uppercase' }}>Integrations</Typography>
+                  <YouTubeIntegrationPanel  token={token} tenantId={tenantId} />
+                  <FacebookIntegrationPanel token={token} tenantId={tenantId} />
+                </Box>
+
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.1em', color: AP.muted, textTransform: 'uppercase' }}>Infrastructure</Typography>
+                  <IngestPointsPanel token={token} tenantId={tenantId} />
+                </Box>
+
+              </Box>
+            </Box>
+          )}
+
+          {activeTab === 'tenants' && isSuperAdmin && (
             <Box sx={{ p: 2 }}>
-              <TenantSettingsPanel token={token} />
+              <TenantsPanel token={token} />
+            </Box>
+          )}
+
+          {activeTab === 'superadmins' && isSuperAdmin && (
+            <Box sx={{ p: 2 }}>
+              <SuperAdminsPanel token={token} />
             </Box>
           )}
 
@@ -3449,7 +5455,8 @@ function Dashboard({ token, onLogout }) {
         open={previewDialog.open}
         channelName={previewDialog.channelName}
         streamUrl={previewDialog.streamUrl}
-        onClose={() => setPreviewDialog({ open: false, channelName: '', streamUrl: '' })}
+        onClose={() => setPreviewDialog(p => ({ ...p, open: false }))}
+        onExited={() => setPreviewDialog({ open: false, channelName: '', streamUrl: '' })}
       />
       <CostRecordDialog
         open={costRecordDialog.open}
@@ -3483,14 +5490,18 @@ function Dashboard({ token, onLogout }) {
       <StreamDetailDrawer
         open={!!selectedChannel}
         channel={selectedChannel}
+        token={token}
+        tenantId={tenantId}
+        readOnly={isReadOnly}
         onClose={() => setSelectedChannel(null)}
-        onDelete={(id, name) => deleteChannel(id, name)}
+        onDelete={(id, name, ytBroadcastId, ytStreamId, fbLiveVideoId) => deleteChannel(id, name, ytBroadcastId, ytStreamId, fbLiveVideoId)}
         onPreview={ch => setPreviewDialog({ open: true, channelName: ch.name, streamUrl: ch.stream_url })}
       />
       <CreateStreamDrawer
         key={createStreamKey}
         open={createStreamOpen}
         token={token}
+        tenantId={tenantId}
         onClose={() => setCreateStreamOpen(false)}
         onCreated={() => fetchChannels()}
       />
@@ -3516,24 +5527,119 @@ function Dashboard({ token, onLogout }) {
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export default function Admin() {
-  const [token, setToken] = useState(() => sessionStorage.getItem(SESSION_KEY) || '')
+  const [authSession, setAuthSession] = useState(null)   // Supabase session | null
+  const [authLoading, setAuthLoading] = useState(true)
+  const [me, setMe]               = useState(null)       // { isSuperAdmin, tenants } | null
+  const [meLoading, setMeLoading] = useState(false)
+  const [activeTenantId, setActiveTenantId] = useState(() => sessionStorage.getItem(ACTIVE_TENANT_KEY) || '')
 
-  function handleLogin(t) {
-    setToken(t)
+  // Track the live Supabase auth session (handles sign-in, sign-out, and
+  // silent background token refresh so long live-events don't get logged out)
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setAuthSession(data.session || null)
+      setAuthLoading(false)
+    })
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setAuthSession(sess || null)
+    })
+    return () => sub.subscription.unsubscribe()
+  }, [])
+
+  // Persist the current token so independently-routed pages (StreamPage) can
+  // read it the same simple way they always have.
+  useEffect(() => {
+    if (authSession?.access_token) {
+      sessionStorage.setItem(SESSION_KEY, authSession.access_token)
+    } else {
+      sessionStorage.removeItem(SESSION_KEY)
+    }
+  }, [authSession?.access_token])
+
+  // Fetch role + tenant memberships whenever the auth session (re)appears
+  useEffect(() => {
+    if (!authSession?.access_token) { setMe(null); return }
+    setMeLoading(true)
+    fetch('/api/auth-me', { headers: { Authorization: `Bearer ${authSession.access_token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setMe(data))
+      .catch(() => setMe(null))
+      .finally(() => setMeLoading(false))
+  }, [authSession?.access_token])
+
+  // Auto-select the tenant when there's exactly one; drop an invalid stored choice
+  useEffect(() => {
+    if (!me) return
+    const stillValid = me.tenants.some(t => t.id === activeTenantId)
+    if (stillValid) return
+    if (me.tenants.length === 1) {
+      selectTenant(me.tenants[0])
+    } else {
+      setActiveTenantId('')
+      sessionStorage.removeItem(ACTIVE_TENANT_KEY)
+      sessionStorage.removeItem(ROLE_KEY)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me])
+
+  function selectTenant(t) {
+    setActiveTenantId(t.id)
+    sessionStorage.setItem(ACTIVE_TENANT_KEY, t.id)
+    sessionStorage.setItem(ROLE_KEY, me?.isSuperAdmin ? 'super_admin' : t.role)
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    await supabase.auth.signOut()
     sessionStorage.removeItem(SESSION_KEY)
-    setToken('')
+    sessionStorage.removeItem(ACTIVE_TENANT_KEY)
+    sessionStorage.removeItem(ROLE_KEY)
+    setMe(null)
+    setActiveTenantId('')
+  }
+
+  const activeTenant = me?.tenants.find(t => t.id === activeTenantId) || null
+  const tenantRole   = activeTenant ? (me.isSuperAdmin ? 'admin' : activeTenant.role) : null
+
+  let body
+  if (authLoading || (authSession && meLoading)) {
+    body = (
+      <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <CircularProgress sx={{ color: AP.accent }} />
+      </Box>
+    )
+  } else if (!authSession) {
+    body = <LoginScreen />
+  } else if (!me) {
+    body = (
+      <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+        <Typography sx={{ color: AP.muted }}>Couldn't load your account. Please try again.</Typography>
+        <Button variant="outlined" onClick={handleLogout}>Log out</Button>
+      </Box>
+    )
+  } else if (!activeTenant) {
+    body = <TenantPicker tenants={me.tenants} onSelect={selectTenant} onLogout={handleLogout} />
+  } else {
+    body = (
+      <Dashboard
+        token={authSession.access_token}
+        tenantId={activeTenant.id}
+        tenantName={activeTenant.name}
+        isSuperAdmin={me.isSuperAdmin}
+        tenantRole={tenantRole}
+        tenants={me.tenants}
+        onSwitchTenant={id => {
+          const t = me.tenants.find(x => x.id === id)
+          if (t) selectTenant(t)
+        }}
+        onLogout={handleLogout}
+      />
+    )
   }
 
   return (
     <ThemeProvider theme={adminTheme}>
       <CssBaseline />
-      {token
-        ? <Dashboard token={token} onLogout={handleLogout} />
-        : <LoginScreen onLogin={handleLogin} />
-      }
+      {body}
     </ThemeProvider>
   )
 }

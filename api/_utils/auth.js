@@ -1,36 +1,44 @@
-import { createHmac } from 'crypto'
+import { supabase } from './supabase.js'
 
-const SECRET  = () => process.env.ADMIN_SECRET || 'ri-breakers-fallback'
-const TTL_MS  = 24 * 60 * 60 * 1000 // 24 hours
-
-// Round down to the current 24-hour window so tokens stay valid for the whole day
-function currentWindow() {
-  return Math.floor(Date.now() / TTL_MS)
+export const ROLES = {
+  SUPER_ADMIN: 'super_admin', // global — Trilogy Digital agency staff, not tenant-scoped
+  ADMIN:       'admin',       // per-tenant
+  READ_ONLY:   'read_only',   // per-tenant
 }
 
-function sign(window) {
-  return createHmac('sha256', SECRET())
-    .update(`admin-session-v1:${window}`)
-    .digest('hex')
+/**
+ * Verifies a Supabase Auth bearer token and returns the caller's identity.
+ * Returns { id, email, isSuperAdmin } or null if the token is missing/invalid.
+ */
+export async function verifyToken(authHeader) {
+  const jwt = (authHeader || '').replace(/^Bearer\s+/i, '').trim()
+  if (!jwt) return null
+
+  const { data, error } = await supabase.auth.getUser(jwt)
+  if (error || !data?.user) {
+    console.error('[verifyToken] getUser failed:', error?.message, error?.status, 'jwt length:', jwt.length)
+    return null
+  }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('is_super_admin')
+    .eq('id', data.user.id)
+    .single()
+
+  return {
+    id: data.user.id,
+    email: data.user.email,
+    isSuperAdmin: !!profile?.is_super_admin,
+  }
 }
 
-export function generateToken() {
-  return `${currentWindow()}.${sign(currentWindow())}`
+/** True if the resolved session can write in whatever tenant it's scoped to. */
+export function canWrite(session) {
+  return !!session && (session.isSuperAdmin || session.tenantRole === ROLES.ADMIN)
 }
 
-export function verifyToken(authHeader) {
-  const raw = (authHeader || '').replace(/^Bearer\s+/i, '').trim()
-  if (!raw) return false
-
-  const [windowStr, sig] = raw.split('.')
-  if (!windowStr || !sig) return false
-
-  const window = parseInt(windowStr, 10)
-  if (isNaN(window)) return false
-
-  // Accept current window and the previous one (handles tokens issued near midnight)
-  const now = currentWindow()
-  if (window !== now && window !== now - 1) return false
-
-  return sig === sign(window)
+/** True if the resolved session is a Trilogy Digital (global) Super Admin. */
+export function isSuperAdmin(session) {
+  return !!session?.isSuperAdmin
 }
