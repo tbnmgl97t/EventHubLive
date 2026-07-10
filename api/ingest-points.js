@@ -1,7 +1,4 @@
-import { verifyToken } from './_utils/auth.js'
-
-const SITE_ID = process.env.JW_SITE_ID
-const API_SECRET = process.env.JW_API_SECRET || ''
+import { resolveTenantSession, getTenantJwCreds } from './_utils/tenant.js'
 
 function normalise(p) {
   return {
@@ -15,24 +12,30 @@ function normalise(p) {
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).end()
-  if (!verifyToken(req.headers.authorization)) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
+  const session = await resolveTenantSession(req)
+  if (!session) return res.status(401).json({ error: 'Unauthorized' })
+  if (!session.tenantId || !session.tenantRole) return res.status(403).json({ error: 'Not a member of this tenant' })
+
+  const jw = await getTenantJwCreds(session.tenantId)
+  if (!jw) return res.status(400).json({ error: 'JW Player is not configured for this tenant yet' })
 
   const ingest_format = req.query?.ingest_format || 'rtmp'
   const start_date    = req.query?.start_date || ''
   const end_date      = req.query?.end_date   || ''
 
+  // JW expects dates without milliseconds — strip them if present
+  const fmtDate = iso => iso ? iso.replace(/\.\d+Z$/, 'Z').replace(/\+00:00$/, 'Z') : ''
+
   try {
     let url =
-      `https://api.jwplayer.com/v2/sites/${SITE_ID}/live/broadcast/ingest/availability/` +
+      `https://api.jwplayer.com/v2/sites/${jw.siteId}/live/broadcast/ingest/availability/` +
       `?ingest_format=${encodeURIComponent(ingest_format)}&page=1&page_length=50`
-    if (start_date) url += `&start_date=${encodeURIComponent(start_date)}`
-    if (end_date)   url += `&end_date=${encodeURIComponent(end_date)}`
+    if (start_date) url += `&start_date=${encodeURIComponent(fmtDate(start_date))}`
+    if (end_date)   url += `&end_date=${encodeURIComponent(fmtDate(end_date))}`
 
     const r = await fetch(url, {
       headers: {
-        Authorization: API_SECRET,
+        Authorization: jw.apiSecret,
         Accept: 'application/json',
       },
     })

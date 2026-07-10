@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Layout A — Sidebar + Command Center</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #07090f; font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; color: #e2e8f0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; font-size: 13px; }
+
+/* ── Top bar ── */
+.topbar { height: 48px; background: #0a0f1a; border-bottom: 1px solid rgba(255,255,255,0.06); display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0; z-index: 10; }
+.topbar .logo { font-weight: 800; font-size: 0.85rem; letter-spacing: 0.1em; color: #818cf8; }
+.topbar .live-badge { margin-left: auto; background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.4); color: #10b981; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 8px; border-radius: 4px; display: flex; align-items: center; gap: 5px; }
+.topbar .live-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #10b981; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.topbar .user { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg,#6366f1,#8b5cf6); display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700; color: #fff; margin-left: 8px; }
+
+/* ── Layout ── */
+.layout { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Sidebar ── */
+.sidebar { width: 200px; background: #0a0f1a; border-right: 1px solid rgba(255,255,255,0.06); display: flex; flex-direction: column; padding: 16px 0; flex-shrink: 0; }
+.sidebar-section { padding: 0 12px; margin-bottom: 4px; }
+.sidebar-label { font-size: 0.58rem; font-weight: 700; letter-spacing: 0.12em; color: #334155; text-transform: uppercase; padding: 0 8px; margin-bottom: 4px; }
+.nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; cursor: pointer; color: #64748b; font-size: 0.78rem; font-weight: 500; transition: all 0.15s; }
+.nav-item:hover { background: rgba(255,255,255,0.04); color: #cbd5e1; }
+.nav-item.active { background: rgba(99,102,241,0.12); color: #818cf8; }
+.nav-item .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.nav-item .count { margin-left: auto; font-size: 0.6rem; background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 10px; color: #475569; }
+.sidebar-divider { border: none; border-top: 1px solid rgba(255,255,255,0.05); margin: 10px 12px; }
+.sidebar .bottom { margin-top: auto; padding: 0 12px; }
+
+/* ── Main area ── */
+.main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+
+/* ── Stats row ── */
+.stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 20px 0; }
+.stat-card { background: #0d1117; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 14px 16px; }
+.stat-label { font-size: 0.62rem; font-weight: 600; letter-spacing: 0.08em; color: #475569; text-transform: uppercase; margin-bottom: 6px; }
+.stat-value { font-size: 1.5rem; font-weight: 700; line-height: 1; }
+.stat-sub { font-size: 0.68rem; color: #475569; margin-top: 4px; }
+.stat-green .stat-value { color: #10b981; }
+.stat-indigo .stat-value { color: #818cf8; }
+.stat-amber .stat-value { color: #f59e0b; }
+.stat-slate .stat-value { color: #94a3b8; }
+
+/* ── Content grid ── */
+.content-grid { display: grid; grid-template-columns: 1fr 1.6fr; gap: 16px; padding: 16px 20px 20px; flex: 1; min-height: 0; }
+
+/* ── Panels ── */
+.panel { background: #0d1117; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+.panel-header { padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; background: linear-gradient(90deg, rgba(99,102,241,0.06) 0%, transparent 60%); }
+.panel-title { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; color: #fff; }
+.panel-body { overflow-y: auto; flex: 1; }
+.panel-btn { font-size: 0.65rem; font-weight: 600; background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3); color: #818cf8; padding: 4px 10px; border-radius: 5px; cursor: pointer; }
+
+/* ── Tournament items ── */
+.tournament-item { padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); cursor: pointer; transition: background 0.15s; }
+.tournament-item:hover { background: rgba(255,255,255,0.02); }
+.tournament-item.active { background: rgba(99,102,241,0.05); border-left: 2px solid #818cf8; padding-left: 14px; }
+.t-name { font-weight: 600; font-size: 0.82rem; color: #fff; margin-bottom: 3px; }
+.t-meta { font-size: 0.68rem; color: #475569; display: flex; gap: 10px; }
+.t-days { display: flex; gap: 4px; margin-top: 6px; }
+.day-pill { font-size: 0.58rem; font-weight: 600; padding: 2px 7px; border-radius: 10px; }
+.day-live { background: rgba(16,185,129,0.12); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
+.day-sched { background: rgba(99,102,241,0.1); color: #818cf8; border: 1px solid rgba(99,102,241,0.25); }
+.day-past { background: rgba(100,116,139,0.1); color: #64748b; border: 1px solid rgba(100,116,139,0.2); }
+
+/* ── Streams table ── */
+.stream-table { width: 100%; border-collapse: collapse; }
+.stream-table th { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em; color: #334155; text-transform: uppercase; padding: 10px 16px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.stream-table td { padding: 11px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.75rem; vertical-align: middle; }
+.stream-table tr:hover td { background: rgba(255,255,255,0.015); }
+.stream-name { font-weight: 600; color: #fff; }
+.stream-id { font-size: 0.6rem; color: #334155; font-family: monospace; }
+.status-box { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em; gap: 5px; }
+.status-live { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.35); }
+.status-sched { background: rgba(99,102,241,0.15); color: #818cf8; border: 1px solid rgba(99,102,241,0.35); }
+.status-past { background: rgba(100,116,139,0.12); color: #64748b; border: 1px solid rgba(100,116,139,0.25); }
+.status-live::before { content:''; width:5px;height:5px;border-radius:50%;background:#10b981; }
+.time-text { color: #64748b; font-size: 0.7rem; }
+.url-text { font-family: monospace; font-size: 0.62rem; color: #475569; }
+.action-btn { width: 24px; height: 24px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.08); background: transparent; color: #475569; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 0.7rem; margin-left: 2px; }
+.action-btn:hover { border-color: rgba(99,102,241,0.4); color: #818cf8; }
+
+/* ── Back link ── */
+.back { font-size: 0.7rem; color: #334155; padding: 8px 20px; cursor: pointer; display: inline-block; }
+.back:hover { color: #818cf8; }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="logo">⚡ EVENTHUB LIVE</div>
+  <span style="font-size:0.7rem;color:#334155;">Admin Dashboard</span>
+  <div class="live-badge">2 LIVE</div>
+  <div class="user">ML</div>
+</div>
+
+<!-- Layout -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Management</div>
+      <div class="nav-item active"><span class="dot"></span> Dashboard <span class="count">2</span></div>
+      <div class="nav-item"><span class="dot" style="background:#f59e0b"></span> Tournaments <span class="count">3</span></div>
+      <div class="nav-item"><span class="dot" style="background:#10b981"></span> Live Streams <span class="count">5</span></div>
+    </div>
+    <hr class="sidebar-divider">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Finance</div>
+      <div class="nav-item"><span class="dot" style="background:#818cf8"></span> Costs</div>
+      <div class="nav-item"><span class="dot"></span> Reports</div>
+    </div>
+    <hr class="sidebar-divider">
+    <div class="sidebar-section">
+      <div class="sidebar-label">System</div>
+      <div class="nav-item"><span class="dot"></span> Settings</div>
+    </div>
+    <div class="bottom">
+      <div style="font-size:0.62rem;color:#1e293b;padding:8px 8px 0;">v2.1.0 · production</div>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <div class="main">
+    <a class="back" href="index.html">← Back to options</a>
+
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-card stat-green">
+        <div class="stat-label">Live Now</div>
+        <div class="stat-value">2</div>
+        <div class="stat-sub">Key West Classic · Day 1</div>
+      </div>
+      <div class="stat-card stat-indigo">
+        <div class="stat-label">Scheduled Today</div>
+        <div class="stat-value">4</div>
+        <div class="stat-sub">Across 2 tournaments</div>
+      </div>
+      <div class="stat-card stat-amber">
+        <div class="stat-label">Cost This Event</div>
+        <div class="stat-value">$518</div>
+        <div class="stat-sub">Feed fees + CDN</div>
+      </div>
+      <div class="stat-card stat-slate">
+        <div class="stat-label">Total Streams</div>
+        <div class="stat-value">12</div>
+        <div class="stat-sub">3 past · 7 scheduled</div>
+      </div>
+    </div>
+
+    <!-- Content grid -->
+    <div class="content-grid">
+
+      <!-- Tournaments panel -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">🏆 TOURNAMENTS</span>
+          <button class="panel-btn">+ Add</button>
+        </div>
+        <div class="panel-body">
+          <div class="tournament-item active">
+            <div class="t-name">Key West Classic 2026</div>
+            <div class="t-meta"><span>📍 Key West, FL</span><span>Apr 19–20, 2026</span></div>
+            <div class="t-days">
+              <span class="day-pill day-live">Day 1 ●</span>
+              <span class="day-pill day-past">Day 2</span>
+            </div>
+          </div>
+          <div class="tournament-item">
+            <div class="t-name">Block Island Shootout</div>
+            <div class="t-meta"><span>📍 Block Island, RI</span><span>Jun 12–14, 2026</span></div>
+            <div class="t-days">
+              <span class="day-pill day-sched">Day 1</span>
+              <span class="day-pill day-sched">Day 2</span>
+              <span class="day-pill day-sched">Finals</span>
+            </div>
+          </div>
+          <div class="tournament-item">
+            <div class="t-name">Montauk Masters</div>
+            <div class="t-meta"><span>📍 Montauk, NY</span><span>Jul 9–11, 2026</span></div>
+            <div class="t-days">
+              <span class="day-pill day-sched">Pro/Am</span>
+              <span class="day-pill day-sched">Day 1</span>
+              <span class="day-pill day-sched">Day 2</span>
+            </div>
+          </div>
+          <div class="tournament-item">
+            <div class="t-name">Cape Cod Invitational</div>
+            <div class="t-meta"><span>📍 Hyannis, MA</span><span>Aug 7–8, 2026</span></div>
+            <div class="t-days">
+              <span class="day-pill day-sched">Day 1</span>
+              <span class="day-pill day-sched">Day 2</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Streams panel -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">📡 LIVE STREAMS</span>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <select style="background:#0a0f1a;border:1px solid rgba(255,255,255,0.1);color:#64748b;font-size:0.65rem;padding:3px 6px;border-radius:4px;outline:none;">
+              <option>All</option><option>Live</option><option>Scheduled</option><option>Past</option>
+            </select>
+            <button class="panel-btn">+ New</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <table class="stream-table">
+            <thead>
+              <tr><th>Channel</th><th>Status</th><th>Start</th><th>End</th><th>Stream URL</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="stream-name">Main Court Cam 1</div><div class="stream-id">die1qpMr · live_event</div></td>
+                <td><span class="status-box status-live">Live</span></td>
+                <td class="time-text">Apr 19, 8:00 AM EDT</td>
+                <td class="time-text">Apr 19, 5:00 PM EDT</td>
+                <td class="url-text">cdn.jwplayer.com/…/die1qpMr.m3u8</td>
+                <td><button class="action-btn">▶</button><button class="action-btn">🗑</button></td>
+              </tr>
+              <tr>
+                <td><div class="stream-name">Main Court Cam 2</div><div class="stream-id">Cp0w7syq · live_event</div></td>
+                <td><span class="status-box status-live">Live</span></td>
+                <td class="time-text">Apr 19, 8:00 AM EDT</td>
+                <td class="time-text">Apr 19, 5:00 PM EDT</td>
+                <td class="url-text">cdn.jwplayer.com/…/Cp0w7syq.m3u8</td>
+                <td><button class="action-btn">▶</button><button class="action-btn">🗑</button></td>
+              </tr>
+              <tr>
+                <td><div class="stream-name">test Day 1</div><div class="stream-id">CKqKUpFP · event</div></td>
+                <td><span class="status-box status-sched">Scheduled</span></td>
+                <td class="time-text">Apr 24, 8:00 AM EDT</td>
+                <td class="time-text">Apr 24, 5:00 PM EDT</td>
+                <td class="url-text">cdn.jwplayer.com/…/CKqKUpFP.m3u8</td>
+                <td><button class="action-btn">▶</button><button class="action-btn">🗑</button></td>
+              </tr>
+              <tr>
+                <td><div class="stream-name">Main Court Cam 1</div><div class="stream-id">die1qpMr · live_event</div></td>
+                <td><span class="status-box status-past">Past</span></td>
+                <td class="time-text">Apr 20, 8:00 AM EDT</td>
+                <td class="time-text">Apr 20, 4:00 PM EDT</td>
+                <td class="url-text">—</td>
+                <td><button class="action-btn">🗑</button></td>
+              </tr>
+              <tr>
+                <td><div class="stream-name">Main Court Cam 2</div><div class="stream-id">Cp0w7syq · live_event</div></td>
+                <td><span class="status-box status-past">Past</span></td>
+                <td class="time-text">Apr 20, 8:00 AM EDT</td>
+                <td class="time-text">Apr 20, 4:00 PM EDT</td>
+                <td class="url-text">—</td>
+                <td><button class="action-btn">🗑</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

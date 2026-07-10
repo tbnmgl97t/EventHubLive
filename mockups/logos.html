@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>EventHub Live — Logo Concepts</title>
+  <link href="https://fonts.googleapis.com/css2?family=Bayon&family=Poppins:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0a0d14;
+      color: #e2e8f0;
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      padding: 48px 32px;
+    }
+    h1 {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: #64748b;
+      text-transform: uppercase;
+      margin-bottom: 40px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      max-width: 1100px;
+    }
+    .card {
+      background: #111827;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 16px;
+      padding: 40px 32px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+    .card-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: #475569;
+      text-transform: uppercase;
+    }
+    .logo-area {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 24px;
+    }
+    /* ── dark bg variant (default) ── */
+    .preview-dark {
+      background: #0f1117;
+      border-radius: 10px;
+      padding: 28px 24px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* ── light bg variant ── */
+    .preview-light {
+      background: #f1f5f9;
+      border-radius: 10px;
+      padding: 28px 24px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* ── on-accent variant ── */
+    .preview-accent {
+      background: linear-gradient(135deg, #3730a3 0%, #6366f1 100%);
+      border-radius: 10px;
+      padding: 28px 24px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .tag {
+      font-size: 0.62rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: #6366f1;
+      background: rgba(99,102,241,0.1);
+      border: 1px solid rgba(99,102,241,0.25);
+      border-radius: 4px;
+      padding: 2px 8px;
+      align-self: flex-start;
+    }
+    .desc {
+      font-size: 0.78rem;
+      color: #64748b;
+      line-height: 1.6;
+    }
+
+    /* ══════════════════════════════
+       LOGO A — Icon + Wordmark stack
+       Icon: rounded square with
+       lightning bolt mark + gradient
+    ══════════════════════════════ */
+    .logo-a {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .logo-a-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-shadow: 0 0 0 1px rgba(99,102,241,0.4), 0 8px 24px rgba(99,102,241,0.35);
+    }
+    .logo-a-text {
+      display: flex;
+      flex-direction: column;
+      line-height: 1;
+    }
+    .logo-a-text .name {
+      font-family: 'Poppins', sans-serif;
+      font-weight: 800;
+      font-size: 1.25rem;
+      letter-spacing: -0.02em;
+      color: #fff;
+    }
+    .logo-a-text .sub {
+      font-family: 'Inter', sans-serif;
+      font-weight: 500;
+      font-size: 0.6rem;
+      letter-spacing: 0.18em;
+      color: #818cf8;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+    /* light inversion for A */
+    .preview-light .logo-a-text .name { color: #1e1b4b; }
+    .preview-light .logo-a-text .sub  { color: #6366f1; }
+    .preview-accent .logo-a-icon {
+      background: rgba(255,255,255,0.15);
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.2);
+    }
+
+    /* ══════════════════════════════
+       LOGO B — Broadcast mark
+       Hub nodes radiating from E
+    ══════════════════════════════ */
+    .logo-b {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .logo-b-text {
+      font-family: 'Poppins', sans-serif;
+      font-weight: 900;
+      font-size: 1.35rem;
+      letter-spacing: -0.03em;
+      line-height: 1;
+      color: #fff;
+    }
+    .logo-b-text span.accent { color: #6366f1; }
+    .logo-b-text .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: #ef4444;
+      border-radius: 4px;
+      padding: 1px 6px 2px;
+      font-size: 0.55rem;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      vertical-align: middle;
+      margin-left: 5px;
+      position: relative;
+      top: -2px;
+    }
+    .live-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #fff;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(0.75); }
+    }
+    /* light */
+    .preview-light .logo-b-text { color: #1e1b4b; }
+    .preview-light .logo-b-text span.accent { color: #6366f1; }
+    /* accent */
+    .preview-accent .logo-b-text { color: #fff; }
+    .preview-accent .logo-b-text span.accent { color: #c7d2fe; }
+
+    /* ══════════════════════════════
+       LOGO C — Monogram mark
+       Stylised "EH" in a signal-wave
+       circle, clean wordmark beside
+    ══════════════════════════════ */
+    .logo-c {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .logo-c-mark {
+      position: relative;
+      width: 48px;
+      height: 48px;
+      flex-shrink: 0;
+    }
+    .logo-c-text {
+      display: flex;
+      flex-direction: column;
+      line-height: 1;
+    }
+    .logo-c-text .name {
+      font-family: 'Inter', sans-serif;
+      font-weight: 800;
+      font-size: 1.2rem;
+      letter-spacing: -0.03em;
+      color: #fff;
+    }
+    .logo-c-text .name em {
+      font-style: normal;
+      color: #818cf8;
+    }
+    .logo-c-text .tagline {
+      font-family: 'Inter', sans-serif;
+      font-weight: 500;
+      font-size: 0.58rem;
+      letter-spacing: 0.2em;
+      color: #475569;
+      text-transform: uppercase;
+      margin-top: 3px;
+    }
+    /* light */
+    .preview-light .logo-c-text .name { color: #1e1b4b; }
+    .preview-light .logo-c-text .name em { color: #6366f1; }
+    .preview-light .logo-c-text .tagline { color: #94a3b8; }
+    /* accent */
+    .preview-accent .logo-c-text .name { color: #fff; }
+    .preview-accent .logo-c-text .name em { color: #c7d2fe; }
+    .preview-accent .logo-c-text .tagline { color: rgba(255,255,255,0.55); }
+
+    .variant-row {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 100%;
+    }
+    .variant-label {
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: #334155;
+      text-transform: uppercase;
+      padding-left: 2px;
+    }
+  </style>
+</head>
+<body>
+  <h1>EventHub Live — Logo Concepts</h1>
+
+  <div class="grid">
+
+    <!-- ══════ LOGO A ══════ -->
+    <div class="card">
+      <div class="card-label">Option A — Icon + Wordmark</div>
+
+      <div class="variant-row">
+        <div class="variant-label">Dark</div>
+        <div class="preview-dark">
+          <div class="logo-a">
+            <div class="logo-a-icon">
+              <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+                <path d="M15.5 2.5L6 14.5h7.5L11 23.5L22 11h-7.5L15.5 2.5z"
+                  fill="white" stroke="white" stroke-width="0.3" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="logo-a-text">
+              <span class="name">EventHub</span>
+              <span class="sub">Live Streaming Platform</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="variant-row">
+        <div class="variant-label">Light</div>
+        <div class="preview-light">
+          <div class="logo-a">
+            <div class="logo-a-icon">
+              <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+                <path d="M15.5 2.5L6 14.5h7.5L11 23.5L22 11h-7.5L15.5 2.5z"
+                  fill="white" stroke="white" stroke-width="0.3" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="logo-a-text">
+              <span class="name">EventHub</span>
+              <span class="sub">Live Streaming Platform</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="variant-row">
+        <div class="variant-label">On Accent</div>
+        <div class="preview-accent">
+          <div class="logo-a">
+            <div class="logo-a-icon">
+              <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+                <path d="M15.5 2.5L6 14.5h7.5L11 23.5L22 11h-7.5L15.5 2.5z"
+                  fill="white" stroke="white" stroke-width="0.3" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="logo-a-text">
+              <span class="name">EventHub</span>
+              <span class="sub">Live Streaming Platform</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tag">Concept A</div>
+      <p class="desc">Rounded square icon with gradient fill and a lightning bolt mark. Clean Poppins wordmark with a small uppercase tagline. Professional and scalable — works at any size from favicon to billboard.</p>
+    </div>
+
+    <!-- ══════ LOGO B ══════ -->
+    <div class="card">
+      <div class="card-label">Option B — Typographic + Live Badge</div>
+
+      <div class="variant-row">
+        <div class="variant-label">Dark</div>
+        <div class="preview-dark">
+          <div class="logo-b">
+            <svg width="44" height="44" viewBox="0 0 44 44" fill="none" style="flex-shrink:0">
+              <!-- Signal arcs -->
+              <circle cx="22" cy="22" r="18" stroke="rgba(99,102,241,0.2)" stroke-width="1.5" fill="none"/>
+              <circle cx="22" cy="22" r="12" stroke="rgba(99,102,241,0.35)" stroke-width="1.5" fill="none"/>
+              <!-- Play triangle -->
+              <path d="M18 15.5l11 6.5-11 6.5V15.5z" fill="#6366f1"/>
+            </svg>
+            <div>
+              <div class="logo-b-text">
+                Event<span class="accent">Hub</span>
+                <span class="live-pill"><span class="live-dot"></span>LIVE</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="variant-row">
+        <div class="variant-label">Light</div>
+        <div class="preview-light">
+          <div class="logo-b">
+            <svg width="44" height="44" viewBox="0 0 44 44" fill="none" style="flex-shrink:0">
+              <circle cx="22" cy="22" r="18" stroke="rgba(99,102,241,0.3)" stroke-width="1.5" fill="none"/>
+              <circle cx="22" cy="22" r="12" stroke="rgba(99,102,241,0.5)" stroke-width="1.5" fill="none"/>
+              <path d="M18 15.5l11 6.5-11 6.5V15.5z" fill="#6366f1"/>
+            </svg>
+            <div>
+              <div class="logo-b-text">
+                Event<span class="accent">Hub</span>
+                <span class="live-pill"><span class="live-dot"></span>LIVE</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="variant-row">
+        <div class="variant-label">On Accent</div>
+        <div class="preview-accent">
+          <div class="logo-b">
+            <svg width="44" height="44" viewBox="0 0 44 44" fill="none" style="flex-shrink:0">
+              <circle cx="22" cy="22" r="18" stroke="rgba(255,255,255,0.2)" stroke-width="1.5" fill="none"/>
+              <circle cx="22" cy="22" r="12" stroke="rgba(255,255,255,0.35)" stroke-width="1.5" fill="none"/>
+              <path d="M18 15.5l11 6.5-11 6.5V15.5z" fill="white"/>
+            </svg>
+            <div>
+              <div class="logo-b-text">
+                Event<span class="accent">Hub</span>
+                <span class="live-pill"><span class="live-dot"></span>LIVE</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tag">Concept B</div>
+      <p class="desc">Concentric broadcast-ring icon with a play triangle. Bold Poppins wordmark with the "Hub" highlighted in indigo and an animated red LIVE pill. Communicates live video at a glance.</p>
+    </div>
+
+    <!-- ══════ LOGO C ══════ -->
+    <div class="card">
+      <div class="card-label">Option C — Monogram Mark</div>
+
+      <div class="variant-row">
+        <div class="variant-label">Dark</div>
+        <div class="preview-dark">
+          <div class="logo-c">
+            <div class="logo-c-mark">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <defs>
+                  <linearGradient id="cgA" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stop-color="#6366f1"/>
+                    <stop offset="100%" stop-color="#a5b4fc"/>
+                  </linearGradient>
+                </defs>
+                <!-- Hexagon background -->
+                <path d="M24 3L42 13.5v21L24 45 6 34.5v-21L24 3z" fill="url(#cgA)" opacity="0.15"/>
+                <path d="M24 3L42 13.5v21L24 45 6 34.5v-21L24 3z" stroke="url(#cgA)" stroke-width="1.5" fill="none"/>
+                <!-- E H letters -->
+                <text x="9" y="31" font-family="Inter,sans-serif" font-weight="900" font-size="19" fill="url(#cgA)" letter-spacing="-1">EH</text>
+              </svg>
+            </div>
+            <div class="logo-c-text">
+              <span class="name">Event<em>Hub</em></span>
+              <span class="tagline">Live</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="variant-row">
+        <div class="variant-label">Light</div>
+        <div class="preview-light">
+          <div class="logo-c">
+            <div class="logo-c-mark">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <defs>
+                  <linearGradient id="cgB" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stop-color="#4f46e5"/>
+                    <stop offset="100%" stop-color="#818cf8"/>
+                  </linearGradient>
+                </defs>
+                <path d="M24 3L42 13.5v21L24 45 6 34.5v-21L24 3z" fill="url(#cgB)" opacity="0.12"/>
+                <path d="M24 3L42 13.5v21L24 45 6 34.5v-21L24 3z" stroke="url(#cgB)" stroke-width="1.5" fill="none"/>
+                <text x="9" y="31" font-family="Inter,sans-serif" font-weight="900" font-size="19" fill="url(#cgB)" letter-spacing="-1">EH</text>
+              </svg>
+            </div>
+            <div class="logo-c-text">
+              <span class="name">Event<em>Hub</em></span>
+              <span class="tagline">Live</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="variant-row">
+        <div class="variant-label">On Accent</div>
+        <div class="preview-accent">
+          <div class="logo-c">
+            <div class="logo-c-mark">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <path d="M24 3L42 13.5v21L24 45 6 34.5v-21L24 3z" fill="rgba(255,255,255,0.1)"/>
+                <path d="M24 3L42 13.5v21L24 45 6 34.5v-21L24 3z" stroke="rgba(255,255,255,0.5)" stroke-width="1.5" fill="none"/>
+                <text x="9" y="31" font-family="Inter,sans-serif" font-weight="900" font-size="19" fill="white" letter-spacing="-1">EH</text>
+              </svg>
+            </div>
+            <div class="logo-c-text">
+              <span class="name">Event<em>Hub</em></span>
+              <span class="tagline">Live</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tag">Concept C</div>
+      <p class="desc">Hexagon monogram with "EH" initials in gradient — a distinctive app icon that stands alone. Paired with a clean Inter wordmark and a minimal "Live" micro-label. Strong as a favicon or app icon.</p>
+    </div>
+
+  </div>
+</body>
+</html>

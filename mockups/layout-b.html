@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Layout B — Card Grid + Inline Streams</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #07090f; font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; color: #e2e8f0; min-height: 100vh; font-size: 13px; }
+
+/* ── Top bar ── */
+.topbar { height: 52px; background: #07090f; border-bottom: 1px solid rgba(255,255,255,0.06); display: flex; align-items: center; padding: 0 28px; gap: 0; position: sticky; top: 0; z-index: 10; }
+.logo { font-weight: 800; font-size: 0.85rem; letter-spacing: 0.1em; color: #818cf8; margin-right: 32px; }
+.tab { font-size: 0.78rem; font-weight: 500; color: #475569; padding: 0 14px; height: 52px; display: flex; align-items: center; border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.15s; }
+.tab:hover { color: #94a3b8; }
+.tab.active { color: #fff; border-bottom-color: #818cf8; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.live-pill { background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.3); color: #10b981; font-size: 0.6rem; font-weight: 700; padding: 3px 8px; border-radius: 20px; display:flex;align-items:center;gap:5px; }
+.live-pill::before { content:'';width:6px;height:6px;border-radius:50%;background:#10b981;animation:p 1.5s infinite; }
+@keyframes p{0%,100%{opacity:1}50%{opacity:0.3}}
+.user { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg,#6366f1,#8b5cf6); display:flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:700; }
+
+/* ── Page ── */
+.page { max-width: 1200px; margin: 0 auto; padding: 24px 28px; }
+
+/* ── Section header ── */
+.section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.section-title { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em; color: #334155; text-transform: uppercase; display:flex;align-items:center;gap:8px; }
+.section-title span { color: #475569; font-weight: 400; }
+.add-btn { font-size: 0.7rem; font-weight: 600; background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.3); color: #818cf8; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+
+/* ── Tournament cards ── */
+.tournament-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 28px; }
+.t-card { background: #0d1117; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; overflow: hidden; cursor: pointer; transition: all 0.2s; }
+.t-card:hover { border-color: rgba(99,102,241,0.35); transform: translateY(-1px); box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
+.t-card.featured { border-color: rgba(99,102,241,0.3); }
+.t-card-top { padding: 14px 16px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.t-card-name { font-weight: 700; font-size: 0.88rem; color: #fff; margin-bottom: 4px; }
+.t-card-loc { font-size: 0.68rem; color: #475569; margin-bottom: 10px; }
+.t-card-dates { font-size: 0.7rem; color: #64748b; margin-bottom: 10px; }
+.t-days-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.day-chip { font-size: 0.58rem; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+.dc-live { background: rgba(16,185,129,0.12); color: #10b981; border:1px solid rgba(16,185,129,0.3); }
+.dc-sched { background: rgba(99,102,241,0.1); color: #818cf8; border:1px solid rgba(99,102,241,0.25); }
+.dc-past { background: rgba(100,116,139,0.1); color: #475569; border:1px solid rgba(100,116,139,0.2); }
+.t-card-bottom { padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; }
+.t-card-cost { font-size: 0.8rem; font-weight: 700; color: #818cf8; }
+.t-card-cost-label { font-size: 0.6rem; color: #334155; }
+.t-actions { display: flex; gap: 4px; }
+.t-action { width: 26px; height: 26px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.07); background: transparent; color: #334155; cursor: pointer; font-size: 0.72rem; display:flex;align-items:center;justify-content:center; }
+.t-action:hover { border-color: rgba(99,102,241,0.4); color: #818cf8; }
+.cam-row { display: flex; gap: 6px; padding: 0 16px 12px; }
+.cam-badge { display:flex;align-items:center;gap:4px;font-size:0.62rem;color:#94a3b8;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius:5px;padding:3px 8px; }
+.cam-badge::before { content:''; width:6px;height:6px;border-radius:50%;background:#10b981; }
+
+/* ── Streams section ── */
+.streams-panel { background: #0d1117; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; overflow: hidden; }
+.streams-head { padding: 12px 18px; border-bottom: 1px solid rgba(255,255,255,0.05); display:flex;align-items:center;gap:10px; background: linear-gradient(90deg, rgba(99,102,241,0.05) 0%, transparent 50%); }
+.streams-head .title { font-size:0.7rem;font-weight:700;letter-spacing:0.1em;color:#fff; }
+.filter-sel { background:#0a0f1a;border:1px solid rgba(255,255,255,0.1);color:#64748b;font-size:0.65rem;padding:4px 8px;border-radius:5px;outline:none;cursor:pointer; }
+.streams-head .new-btn { margin-left:auto;font-size:0.65rem;font-weight:600;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:#818cf8;padding:5px 12px;border-radius:5px;cursor:pointer; }
+table { width:100%;border-collapse:collapse; }
+th { font-size:0.6rem;font-weight:700;letter-spacing:0.08em;color:#334155;text-transform:uppercase;padding:10px 18px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.04); }
+td { padding:11px 18px;border-bottom:1px solid rgba(255,255,255,0.03);vertical-align:middle; }
+tr:hover td { background:rgba(255,255,255,0.01); }
+tr:last-child td { border-bottom:none; }
+.ch-name { font-weight:600;font-size:0.78rem;color:#fff; }
+.ch-id { font-size:0.6rem;color:#2d3f55;font-family:monospace; }
+.sb { display:inline-flex;align-items:center;padding:3px 8px;border-radius:4px;font-size:0.6rem;font-weight:700;letter-spacing:0.04em;gap:4px; }
+.sb-live { background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.35); }
+.sb-live::before { content:'';width:5px;height:5px;border-radius:50%;background:#10b981; }
+.sb-sched { background:rgba(99,102,241,0.15);color:#818cf8;border:1px solid rgba(99,102,241,0.35); }
+.sb-past { background:rgba(100,116,139,0.1);color:#64748b;border:1px solid rgba(100,116,139,0.25); }
+.tm { font-size:0.68rem;color:#475569; }
+.url { font-family:monospace;font-size:0.6rem;color:#334155;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.acts button { width:24px;height:24px;border-radius:5px;border:1px solid rgba(255,255,255,0.07);background:transparent;color:#334155;cursor:pointer;font-size:0.68rem;margin-left:3px;display:inline-flex;align-items:center;justify-content:center; }
+.acts button:hover { border-color:rgba(99,102,241,0.4);color:#818cf8; }
+
+.back { font-size:0.7rem;color:#334155;cursor:pointer;display:inline-block;padding:0 0 18px; }
+.back:hover { color:#818cf8; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">⚡ EVENTHUB LIVE</div>
+  <div class="tab active">Dashboard</div>
+  <div class="tab">Costs</div>
+  <div class="tab">Settings</div>
+  <div class="topbar-right">
+    <div class="live-pill">2 LIVE</div>
+    <div class="user">ML</div>
+  </div>
+</div>
+
+<div class="page">
+  <a class="back" href="index.html">← Back to options</a>
+
+  <!-- Tournaments -->
+  <div class="section-head">
+    <div class="section-title">🏆 Tournaments <span>4 total · 1 active</span></div>
+    <button class="add-btn">+ Add Tournament</button>
+  </div>
+
+  <div class="tournament-grid">
+
+    <div class="t-card featured">
+      <div class="t-card-top">
+        <div class="t-card-name">Key West Classic 2026</div>
+        <div class="t-card-loc">📍 Key West, FL</div>
+        <div class="t-card-dates">Apr 19 – Apr 20, 2026</div>
+        <div class="t-days-row">
+          <span class="day-chip dc-live">● Day 1</span>
+          <span class="day-chip dc-past">Day 2 / Finals</span>
+        </div>
+      </div>
+      <div class="cam-row">
+        <span class="cam-badge">Main Court Cam 1</span>
+        <span class="cam-badge">Main Court Cam 2</span>
+      </div>
+      <div class="t-card-bottom">
+        <div><div class="t-card-cost-label">Total Cost</div><div class="t-card-cost">$518.12</div></div>
+        <div class="t-actions"><button class="t-action">✏️</button><button class="t-action">+</button><button class="t-action">🗑</button></div>
+      </div>
+    </div>
+
+    <div class="t-card">
+      <div class="t-card-top">
+        <div class="t-card-name">Block Island Shootout</div>
+        <div class="t-card-loc">📍 Block Island, RI</div>
+        <div class="t-card-dates">Jun 12 – Jun 14, 2026</div>
+        <div class="t-days-row">
+          <span class="day-chip dc-sched">Day 1</span>
+          <span class="day-chip dc-sched">Day 2</span>
+          <span class="day-chip dc-sched">Finals</span>
+        </div>
+      </div>
+      <div class="cam-row" style="opacity:0.4"><span style="font-size:0.62rem;color:#334155;padding:3px 0;">No cameras assigned</span></div>
+      <div class="t-card-bottom">
+        <div><div class="t-card-cost-label">Estimated</div><div class="t-card-cost" style="color:#475569;">—</div></div>
+        <div class="t-actions"><button class="t-action">✏️</button><button class="t-action">+</button><button class="t-action">🗑</button></div>
+      </div>
+    </div>
+
+    <div class="t-card">
+      <div class="t-card-top">
+        <div class="t-card-name">Montauk Masters</div>
+        <div class="t-card-loc">📍 Montauk, NY</div>
+        <div class="t-card-dates">Jul 9 – Jul 11, 2026</div>
+        <div class="t-days-row">
+          <span class="day-chip dc-sched">Pro/Am</span>
+          <span class="day-chip dc-sched">Day 1</span>
+          <span class="day-chip dc-sched">Day 2</span>
+        </div>
+      </div>
+      <div class="cam-row" style="opacity:0.4"><span style="font-size:0.62rem;color:#334155;padding:3px 0;">No cameras assigned</span></div>
+      <div class="t-card-bottom">
+        <div><div class="t-card-cost-label">Estimated</div><div class="t-card-cost" style="color:#475569;">—</div></div>
+        <div class="t-actions"><button class="t-action">✏️</button><button class="t-action">+</button><button class="t-action">🗑</button></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Live Streams -->
+  <div class="section-head">
+    <div class="section-title">📡 Live Streams <span>5 total</span></div>
+  </div>
+  <div class="streams-panel">
+    <div class="streams-head">
+      <span class="title">LIVE STREAMS</span>
+      <select class="filter-sel"><option>All</option><option>Live</option><option>Scheduled</option><option>Past</option></select>
+      <button class="new-btn">+ New Live Stream</button>
+    </div>
+    <table>
+      <thead><tr><th>Channel</th><th>Status</th><th>Start</th><th>End</th><th>Stream URL</th><th>Ingest Key</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><div class="ch-name">Main Court Cam 1</div><div class="ch-id">die1qpMr · live_event</div></td>
+          <td><span class="sb sb-live">Live</span></td>
+          <td class="tm">Apr 19, 8:00 AM EDT</td><td class="tm">Apr 19, 5:00 PM EDT</td>
+          <td><div class="url">cdn.jwplayer.com/live/broadcast/die1qpMr.m3u8</div></td>
+          <td style="font-family:monospace;font-size:0.62rem;color:#818cf8;">a8xZ9q…</td>
+          <td class="acts"><button>▶</button><button>🗑</button></td>
+        </tr>
+        <tr>
+          <td><div class="ch-name">Main Court Cam 2</div><div class="ch-id">Cp0w7syq · live_event</div></td>
+          <td><span class="sb sb-live">Live</span></td>
+          <td class="tm">Apr 19, 8:00 AM EDT</td><td class="tm">Apr 19, 5:00 PM EDT</td>
+          <td><div class="url">cdn.jwplayer.com/live/broadcast/Cp0w7syq.m3u8</div></td>
+          <td style="font-family:monospace;font-size:0.62rem;color:#818cf8;">bT3Wm1…</td>
+          <td class="acts"><button>▶</button><button>🗑</button></td>
+        </tr>
+        <tr>
+          <td><div class="ch-name">test Day 1</div><div class="ch-id">CKqKUpFP · event</div></td>
+          <td><span class="sb sb-sched">Scheduled</span></td>
+          <td class="tm">Apr 24, 8:00 AM EDT</td><td class="tm">Apr 24, 5:00 PM EDT</td>
+          <td><div class="url">cdn.jwplayer.com/live/broadcast/CKqKUpFP.m3u8</div></td>
+          <td style="font-family:monospace;font-size:0.62rem;color:#818cf8;">mS6CF2av</td>
+          <td class="acts"><button>▶</button><button>🗑</button></td>
+        </tr>
+        <tr style="opacity:0.6">
+          <td><div class="ch-name">Main Court Cam 1</div><div class="ch-id">die1qpMr</div></td>
+          <td><span class="sb sb-past">Past</span></td>
+          <td class="tm">Apr 20, 8:00 AM EDT</td><td class="tm">Apr 20, 4:00 PM EDT</td>
+          <td><div class="url">—</div></td><td>—</td>
+          <td class="acts"><button>🗑</button></td>
+        </tr>
+        <tr style="opacity:0.6">
+          <td><div class="ch-name">Main Court Cam 2</div><div class="ch-id">Cp0w7syq</div></td>
+          <td><span class="sb sb-past">Past</span></td>
+          <td class="tm">Apr 20, 8:00 AM EDT</td><td class="tm">Apr 20, 4:00 PM EDT</td>
+          <td><div class="url">—</div></td><td>—</td>
+          <td class="acts"><button>🗑</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+</body>
+</html>

@@ -9,7 +9,8 @@
  * Edge Config key.
  */
 
-import { verifyToken }                   from './_utils/auth.js'
+import { resolveTenantSession }              from './_utils/tenant.js'
+import { canWrite }                          from './_utils/auth.js'
 import { readTournaments, writeTournaments } from './_utils/tournaments.js'
 
 /** Flatten all tournament days into a single sorted array. */
@@ -21,8 +22,10 @@ function flattenDays(tournaments) {
 
 export default async function handler(req, res) {
   // GET is public — the main app reads without auth
-  if (req.method !== 'GET' && !verifyToken(req.headers.authorization)) {
-    return res.status(401).json({ error: 'Unauthorized' })
+  if (req.method !== 'GET') {
+    const session = await resolveTenantSession(req)
+    if (!session) return res.status(401).json({ error: 'Unauthorized' })
+    if (!session.tenantId || !canWrite(session)) return res.status(403).json({ error: 'Forbidden' })
   }
 
   try {

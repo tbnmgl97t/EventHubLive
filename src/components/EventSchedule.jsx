@@ -116,7 +116,7 @@ export default function EventSchedule({ flat = false, events: eventsProp }) {
             <AccessTimeIcon sx={{ color: '#e65d2c', fontSize: 16 }} />
             {status === 'live' ? (
               <Typography variant="body2" sx={{ color: '#e65d2c', fontWeight: 700 }}>
-                {nextEvent.label} is live now &mdash; ends {endLabel} {nextEvent.tz}
+                {nextEvent.label} is live now &mdash; ends {endLabel} ET
               </Typography>
             ) : (
               <Typography variant="body2" sx={{ color: '#a8bcd4' }}>
@@ -170,7 +170,7 @@ export default function EventSchedule({ flat = false, events: eventsProp }) {
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
                     <AccessTimeIcon sx={{ fontSize: 12, color: '#a8bcd4' }} />
                     <Typography variant="caption" sx={{ color: '#a8bcd4', fontSize: '0.72rem' }}>
-                      {ev.start} – {ev.end} {ev.tz}
+                      {ev.start} – {ev.end} ET
                     </Typography>
                   </Box>
                 </Box>

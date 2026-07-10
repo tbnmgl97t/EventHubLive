@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Layout C — Split Pane Master/Detail</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #07090f; font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; color: #e2e8f0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; font-size: 13px; }
+
+/* ── Top bar ── */
+.topbar { height: 48px; background: #0a0f1a; border-bottom: 1px solid rgba(255,255,255,0.06); display:flex;align-items:center;padding:0 20px;gap:0;flex-shrink:0; }
+.logo { font-weight:800;font-size:0.85rem;letter-spacing:0.1em;color:#818cf8;margin-right:28px; }
+.tab { font-size:0.78rem;font-weight:500;color:#475569;padding:0 14px;height:48px;display:flex;align-items:center;border-bottom:2px solid transparent;cursor:pointer;transition:all 0.15s; }
+.tab:hover { color:#94a3b8; }
+.tab.active { color:#fff;border-bottom-color:#818cf8; }
+.topbar-right { margin-left:auto;display:flex;align-items:center;gap:10px; }
+.live-pill { background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);color:#10b981;font-size:0.6rem;font-weight:700;padding:3px 8px;border-radius:20px;display:flex;align-items:center;gap:5px; }
+.live-pill::before { content:'';width:6px;height:6px;border-radius:50%;background:#10b981;animation:p 1.5s infinite; }
+@keyframes p{0%,100%{opacity:1}50%{opacity:0.3}}
+.user { width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:700; }
+
+/* ── Split layout ── */
+.split { display:flex;flex:1;overflow:hidden; }
+
+/* ── Left pane: master list ── */
+.left-pane { width: 300px; background: #0a0f1a; border-right: 1px solid rgba(255,255,255,0.06); display:flex;flex-direction:column;flex-shrink:0; overflow:hidden; }
+.pane-header { padding:14px 16px;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;align-items:center;justify-content:space-between;flex-shrink:0; }
+.pane-title { font-size:0.68rem;font-weight:700;letter-spacing:0.12em;color:#334155;text-transform:uppercase; }
+.add-btn { font-size:0.65rem;font-weight:600;background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.3);color:#818cf8;padding:4px 10px;border-radius:5px;cursor:pointer; }
+.section-divider { padding: 8px 16px 4px; font-size:0.58rem;font-weight:700;letter-spacing:0.12em;color:#1e293b;text-transform:uppercase; }
+.t-item { padding:10px 16px;cursor:pointer;border-left:2px solid transparent;border-bottom:1px solid rgba(255,255,255,0.03);transition:all 0.15s; }
+.t-item:hover { background:rgba(255,255,255,0.02);border-left-color:rgba(99,102,241,0.3); }
+.t-item.selected { background:rgba(99,102,241,0.06);border-left-color:#818cf8; }
+.t-item-name { font-weight:600;font-size:0.8rem;color:#fff;margin-bottom:2px; }
+.t-item-meta { font-size:0.65rem;color:#475569;display:flex;gap:8px; }
+.t-status-dot { width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px; flex-shrink:0; }
+.t-item-days { display:flex;gap:3px;margin-top:5px; }
+.dp { font-size:0.55rem;font-weight:600;padding:1px 6px;border-radius:8px; }
+.dp-live{background:rgba(16,185,129,0.12);color:#10b981;border:1px solid rgba(16,185,129,0.3);}
+.dp-sched{background:rgba(99,102,241,0.1);color:#818cf8;border:1px solid rgba(99,102,241,0.25);}
+.dp-past{background:rgba(100,116,139,0.08);color:#475569;border:1px solid rgba(100,116,139,0.2);}
+.pane-scroll { overflow-y:auto;flex:1; }
+.streams-section { border-top:1px solid rgba(255,255,255,0.05); }
+.stream-item { padding:9px 16px;cursor:pointer;border-left:2px solid transparent;border-bottom:1px solid rgba(255,255,255,0.03);display:flex;align-items:center;gap:8px;transition:all 0.15s; }
+.stream-item:hover { background:rgba(255,255,255,0.02); }
+.stream-dot { width:7px;height:7px;border-radius:50%;flex-shrink:0; }
+.stream-info { flex:1;min-width:0; }
+.stream-name { font-size:0.75rem;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.stream-sub { font-size:0.6rem;color:#334155; }
+.sb { display:inline-flex;align-items:center;padding:1px 6px;border-radius:3px;font-size:0.57rem;font-weight:700; }
+.sb-live{background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);}
+.sb-sched{background:rgba(99,102,241,0.15);color:#818cf8;border:1px solid rgba(99,102,241,0.3);}
+.sb-past{background:rgba(100,116,139,0.1);color:#475569;border:1px solid rgba(100,116,139,0.2);}
+
+/* ── Right pane: detail ── */
+.right-pane { flex:1;overflow-y:auto;background:#07090f;display:flex;flex-direction:column; }
+.detail-header { padding:20px 24px 16px;border-bottom:1px solid rgba(255,255,255,0.06);flex-shrink:0;background:linear-gradient(180deg,rgba(99,102,241,0.04) 0%,transparent 100%); }
+.detail-name { font-size:1.15rem;font-weight:700;color:#fff;margin-bottom:4px; }
+.detail-meta { font-size:0.72rem;color:#475569;display:flex;gap:16px;align-items:center; }
+.detail-meta .badge { background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);color:#818cf8;font-size:0.6rem;font-weight:700;padding:2px 8px;border-radius:4px; }
+.detail-actions { display:flex;gap:6px;margin-top:12px; }
+.da-btn { font-size:0.68rem;font-weight:600;padding:5px 12px;border-radius:6px;cursor:pointer;border:1px solid rgba(255,255,255,0.08);background:transparent;color:#64748b; }
+.da-btn:hover { border-color:rgba(99,102,241,0.4);color:#818cf8; }
+.da-btn.primary { background:rgba(99,102,241,0.15);border-color:rgba(99,102,241,0.35);color:#818cf8; }
+
+/* ── Detail content ── */
+.detail-body { padding:20px 24px;display:flex;flex-direction:column;gap:20px; }
+.sub-section-title { font-size:0.62rem;font-weight:700;letter-spacing:0.1em;color:#334155;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between; }
+.sub-section-title button { font-size:0.6rem;font-weight:600;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);color:#818cf8;padding:2px 8px;border-radius:4px;cursor:pointer; }
+
+/* ── Day rows ── */
+.day-row { background:#0d1117;border:1px solid rgba(255,255,255,0.05);border-radius:8px;padding:12px 14px;display:flex;align-items:flex-start;gap:12px;margin-bottom:8px; }
+.day-row-left { flex:1; }
+.day-label { font-weight:700;font-size:0.82rem;color:#fff;margin-bottom:2px; }
+.day-date { font-size:0.68rem;color:#475569; }
+.day-time { font-size:0.68rem;color:#64748b;margin-top:2px; }
+.day-cams { display:flex;gap:6px;margin-top:8px; }
+.cam-chip { display:flex;align-items:center;gap:5px;font-size:0.65rem;background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2);border-radius:5px;padding:4px 10px;color:#94a3b8; }
+.cam-chip::before { content:'';width:6px;height:6px;border-radius:50%;background:#10b981;flex-shrink:0; }
+.cam-chip-empty { display:flex;align-items:center;gap:5px;font-size:0.65rem;background:rgba(255,255,255,0.03);border:1px dashed rgba(255,255,255,0.1);border-radius:5px;padding:4px 10px;color:#334155;cursor:pointer; }
+.day-row-right { display:flex;flex-direction:column;align-items:flex-end;gap:4px; }
+.day-cost { font-size:0.88rem;font-weight:700;color:#818cf8; }
+.day-cost-label { font-size:0.6rem;color:#334155; }
+.day-acts { display:flex;gap:3px;margin-top:6px; }
+.da { width:24px;height:24px;border-radius:4px;border:1px solid rgba(255,255,255,0.07);background:transparent;color:#334155;cursor:pointer;font-size:0.68rem;display:flex;align-items:center;justify-content:center; }
+.da:hover { border-color:rgba(99,102,241,0.4);color:#818cf8; }
+
+/* ── Cost summary ── */
+.cost-row { display:grid;grid-template-columns:repeat(3,1fr);gap:10px; }
+.cost-stat { background:#0d1117;border:1px solid rgba(255,255,255,0.05);border-radius:8px;padding:12px 14px; }
+.cs-label { font-size:0.6rem;font-weight:600;letter-spacing:0.07em;color:#334155;text-transform:uppercase;margin-bottom:4px; }
+.cs-value { font-size:1.1rem;font-weight:700;color:#818cf8; }
+.cs-sub { font-size:0.63rem;color:#334155;margin-top:2px; }
+
+.back { font-size:0.7rem;color:#334155;cursor:pointer;display:inline-block;padding:6px 24px;border-bottom:1px solid rgba(255,255,255,0.04);width:100%;flex-shrink:0; }
+.back:hover { color:#818cf8; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">⚡ EVENTHUB LIVE</div>
+  <div class="tab active">Dashboard</div>
+  <div class="tab">Costs</div>
+  <div class="tab">Settings</div>
+  <div class="topbar-right">
+    <div class="live-pill">2 LIVE</div>
+    <div class="user">ML</div>
+  </div>
+</div>
+
+<a class="back" href="index.html">← Back to options</a>
+
+<div class="split">
+
+  <!-- Left pane -->
+  <div class="left-pane">
+    <div class="pane-header">
+      <span class="pane-title">🏆 Tournaments</span>
+      <button class="add-btn">+ Add</button>
+    </div>
+    <div class="pane-scroll">
+
+      <div class="section-divider">Active & Upcoming</div>
+      <div class="t-item selected">
+        <div class="t-item-name">Key West Classic 2026</div>
+        <div class="t-item-meta"><span>📍 Key West, FL</span><span>Apr 19–20</span></div>
+        <div class="t-item-days">
+          <span class="dp dp-live">● Day 1</span>
+          <span class="dp dp-past">Day 2 / Finals</span>
+        </div>
+      </div>
+      <div class="t-item">
+        <div class="t-item-name">Block Island Shootout</div>
+        <div class="t-item-meta"><span>📍 Block Island, RI</span><span>Jun 12–14</span></div>
+        <div class="t-item-days"><span class="dp dp-sched">Day 1</span><span class="dp dp-sched">Day 2</span><span class="dp dp-sched">Finals</span></div>
+      </div>
+      <div class="t-item">
+        <div class="t-item-name">Montauk Masters</div>
+        <div class="t-item-meta"><span>📍 Montauk, NY</span><span>Jul 9–11</span></div>
+        <div class="t-item-days"><span class="dp dp-sched">Pro/Am</span><span class="dp dp-sched">Day 1</span><span class="dp dp-sched">Day 2</span></div>
+      </div>
+      <div class="t-item">
+        <div class="t-item-name">Cape Cod Invitational</div>
+        <div class="t-item-meta"><span>📍 Hyannis, MA</span><span>Aug 7–8</span></div>
+        <div class="t-item-days"><span class="dp dp-sched">Day 1</span><span class="dp dp-sched">Day 2</span></div>
+      </div>
+
+      <div class="streams-section">
+        <div class="pane-header" style="padding:12px 16px;">
+          <span class="pane-title">📡 Live Streams</span>
+          <button class="add-btn">+ New</button>
+        </div>
+        <div class="stream-item">
+          <div class="stream-dot" style="background:#10b981;box-shadow:0 0 6px rgba(16,185,129,0.6);"></div>
+          <div class="stream-info">
+            <div class="stream-name">Main Court Cam 1</div>
+            <div class="stream-sub">die1qpMr · Apr 19</div>
+          </div>
+          <span class="sb sb-live">Live</span>
+        </div>
+        <div class="stream-item">
+          <div class="stream-dot" style="background:#10b981;box-shadow:0 0 6px rgba(16,185,129,0.6);"></div>
+          <div class="stream-info">
+            <div class="stream-name">Main Court Cam 2</div>
+            <div class="stream-sub">Cp0w7syq · Apr 19</div>
+          </div>
+          <span class="sb sb-live">Live</span>
+        </div>
+        <div class="stream-item">
+          <div class="stream-dot" style="background:#818cf8;"></div>
+          <div class="stream-info">
+            <div class="stream-name">test Day 1</div>
+            <div class="stream-sub">CKqKUpFP · Apr 24</div>
+          </div>
+          <span class="sb sb-sched">Sched</span>
+        </div>
+        <div class="stream-item" style="opacity:0.5">
+          <div class="stream-dot" style="background:#475569;"></div>
+          <div class="stream-info">
+            <div class="stream-name">Main Court Cam 1</div>
+            <div class="stream-sub">die1qpMr · Apr 20</div>
+          </div>
+          <span class="sb sb-past">Past</span>
+        </div>
+        <div class="stream-item" style="opacity:0.5">
+          <div class="stream-dot" style="background:#475569;"></div>
+          <div class="stream-info">
+            <div class="stream-name">Main Court Cam 2</div>
+            <div class="stream-sub">Cp0w7syq · Apr 20</div>
+          </div>
+          <span class="sb sb-past">Past</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Right pane: detail -->
+  <div class="right-pane">
+    <div class="detail-header">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;">
+        <div>
+          <div class="detail-name">Key West Classic 2026</div>
+          <div class="detail-meta">
+            <span>📍 Key West, FL</span>
+            <span>Apr 19 – Apr 20, 2026</span>
+            <span class="badge">2 days</span>
+            <span class="badge" style="background:rgba(16,185,129,0.1);border-color:rgba(16,185,129,0.3);color:#10b981;">● Day 1 Live</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button class="da-btn primary">+ Add Day</button>
+          <button class="da-btn">✏️ Edit</button>
+          <button class="da-btn">🗑 Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail-body">
+
+      <!-- Cost summary -->
+      <div>
+        <div class="sub-section-title">Cost Summary</div>
+        <div class="cost-row">
+          <div class="cost-stat">
+            <div class="cs-label">Feed Fees</div>
+            <div class="cs-value">$510.00</div>
+            <div class="cs-sub">34 stream-hours × $15</div>
+          </div>
+          <div class="cost-stat">
+            <div class="cs-label">CDN Delivery</div>
+            <div class="cs-value">$8.12</div>
+            <div class="cs-sub">162.3 GB × $0.05</div>
+          </div>
+          <div class="cost-stat" style="border-color:rgba(99,102,241,0.2);">
+            <div class="cs-label">Total</div>
+            <div class="cs-value" style="font-size:1.3rem;">$518.12</div>
+            <div class="cs-sub">feed fees + CDN</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Days -->
+      <div>
+        <div class="sub-section-title">Tournament Days <button>+ Add Day</button></div>
+
+        <div class="day-row">
+          <div class="day-row-left">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div class="day-label">Day 1</div>
+              <span style="display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:0.58rem;font-weight:700;background:rgba(16,185,129,0.12);color:#10b981;border:1px solid rgba(16,185,129,0.3);">● LIVE</span>
+            </div>
+            <div class="day-date">Sun, Apr 19, 2026</div>
+            <div class="day-time">8:00 AM – 5:00 PM EDT</div>
+            <div class="day-cams">
+              <span class="cam-chip">Main Court Cam 1</span>
+              <span class="cam-chip">Main Court Cam 2</span>
+            </div>
+          </div>
+          <div class="day-row-right">
+            <div class="day-cost-label">Day Cost</div>
+            <div class="day-cost">$278.12</div>
+            <div class="day-acts"><button class="da">✏️</button><button class="da">🗑</button></div>
+          </div>
+        </div>
+
+        <div class="day-row" style="opacity:0.7">
+          <div class="day-row-left">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div class="day-label">Day 2 / Finals</div>
+              <span style="display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:0.58rem;font-weight:700;background:rgba(245,158,11,0.1);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);">PENDING CDN</span>
+            </div>
+            <div class="day-date">Mon, Apr 20, 2026</div>
+            <div class="day-time">8:00 AM – 4:00 PM EDT</div>
+            <div class="day-cams">
+              <span class="cam-chip">Main Court Cam 1</span>
+              <span class="cam-chip">Main Court Cam 2</span>
+            </div>
+          </div>
+          <div class="day-row-right">
+            <div class="day-cost-label">Day Cost</div>
+            <div class="day-cost">$240.00</div>
+            <div class="day-acts"><button class="da">✏️</button><button class="da">🗑</button></div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
