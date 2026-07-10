@@ -233,8 +233,8 @@ create table if not exists vod_media (
 create index if not exists vod_media_tenant_idx on vod_media (tenant_id);
 
 -- Per-tenant BrightSpot CMS credentials — same pattern as jw_site_id /
--- jw_api_secret above. news9_url is the customer-facing site the CMS
+-- jw_api_secret above. site_url is the customer-facing site the CMS
 -- serves content for; cms_url is the BrightSpot admin/API host.
 alter table tenants add column if not exists brightspot_cms_url    text;
-alter table tenants add column if not exists brightspot_news9_url  text;
+alter table tenants add column if not exists brightspot_site_url  text;
 alter table tenants add column if not exists brightspot_api_key    text;

@@ -3966,15 +3966,15 @@ function CdnReadOnlyPanel({ records = [], channels = [], pricing, tournaments = 
 // Defaults point at Griffin's UAT BrightSpot instance (the environment this
 // integration was built/spiked against) so the fields aren't blank on first load.
 const BRIGHTSPOT_DEFAULTS = {
-  cmsUrl:   'https://cms.griffin-uat.lower.griffin-media.brightspot.cloud',
-  news9Url: 'https://news9.griffin-uat.lower.griffin-media.brightspot.cloud',
-  apiKey:   'BIPiEDEezXTX6KJsgwN939PV4XwJyshyzZm2NXB',
+  cmsUrl:  'https://cms.griffin-uat.lower.griffin-media.brightspot.cloud',
+  siteUrl: 'https://news9.griffin-uat.lower.griffin-media.brightspot.cloud',
+  apiKey:  'BIPiEDEezXTX6KJsgwN939PV4XwJyshyzZm2NXB',
 }
 
 function BrightSpotSettingsPanel({ token, tenantId }) {
-  const [cmsUrl, setCmsUrl]     = useState(BRIGHTSPOT_DEFAULTS.cmsUrl)
-  const [news9Url, setNews9Url] = useState(BRIGHTSPOT_DEFAULTS.news9Url)
-  const [apiKey, setApiKey]     = useState(BRIGHTSPOT_DEFAULTS.apiKey)
+  const [cmsUrl, setCmsUrl]   = useState(BRIGHTSPOT_DEFAULTS.cmsUrl)
+  const [siteUrl, setSiteUrl] = useState(BRIGHTSPOT_DEFAULTS.siteUrl)
+  const [apiKey, setApiKey]   = useState(BRIGHTSPOT_DEFAULTS.apiKey)
   const [configured, setConfigured] = useState(false)
   const [loading, setLoading]   = useState(true)
   const [saving, setSaving]     = useState(false)
@@ -3989,7 +3989,7 @@ function BrightSpotSettingsPanel({ token, tenantId }) {
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         setCmsUrl(data?.brightspot_cms_url || BRIGHTSPOT_DEFAULTS.cmsUrl)
-        setNews9Url(data?.brightspot_news9_url || BRIGHTSPOT_DEFAULTS.news9Url)
+        setSiteUrl(data?.brightspot_site_url || BRIGHTSPOT_DEFAULTS.siteUrl)
         setApiKey(data?.brightspot_api_key || BRIGHTSPOT_DEFAULTS.apiKey)
         setConfigured(!!data?.brightspot_cms_url)
       })
@@ -4004,9 +4004,9 @@ function BrightSpotSettingsPanel({ token, tenantId }) {
     setSaving(true); setError(''); setSaved(false)
     try {
       const body = {
-        brightspot_cms_url:   cmsUrl.trim() || null,
-        brightspot_news9_url: news9Url.trim() || null,
-        brightspot_api_key:   apiKey.trim() || null,
+        brightspot_cms_url:  cmsUrl.trim() || null,
+        brightspot_site_url: siteUrl.trim() || null,
+        brightspot_api_key:  apiKey.trim() || null,
       }
       const res = await fetch('/api/tenant', {
         method: 'PUT',
@@ -4032,7 +4032,7 @@ function BrightSpotSettingsPanel({ token, tenantId }) {
         method: 'POST',
         headers: authHeader(token, tenantId),
         body: JSON.stringify({
-          url:      (news9Url || cmsUrl).trim(),
+          url:      (siteUrl || cmsUrl).trim(),
           apiKey:   apiKey.trim(),
           endpoint: '/api/getAlerts',
         }),
@@ -4071,7 +4071,8 @@ function BrightSpotSettingsPanel({ token, tenantId }) {
           {error && <Alert severity="error" sx={{ fontSize: '0.78rem' }}>{error}</Alert>}
           {testResult && <Alert severity={testResult.severity} sx={{ fontSize: '0.78rem', wordBreak: 'break-word' }}>{testResult.message}</Alert>}
           <TextField size="small" label="CMS URL" fullWidth value={cmsUrl} onChange={e => setCmsUrl(e.target.value)} />
-          <TextField size="small" label="News9 URL (optional)" fullWidth value={news9Url} onChange={e => setNews9Url(e.target.value)} />
+          <TextField size="small" label="Site URL (optional)" fullWidth value={siteUrl} onChange={e => setSiteUrl(e.target.value)}
+            helperText="Your BrightSpot publication or delivery URL" />
           <TextField size="small" type="password" label="API Key" fullWidth value={apiKey} onChange={e => setApiKey(e.target.value)} />
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button variant="outlined" size="small" onClick={handleTest} disabled={testing}
