@@ -48,7 +48,7 @@ const EMPTY_FORM = {
   ingest_format: 'rtmp', region: 'us-east-1',
   ingest_url: '', stream_key: '',
   simulcast_website: true, simulcast_youtube: false, simulcast_facebook: false, simulcast_app: false,
-  vod_recording: true,
+  vod_recording: true, youtube_broadcast_id: '',
 }
 
 function ToggleRow({ label, hint, checked, onChange, color = AP.accent, disabled }) {
@@ -148,6 +148,7 @@ export default function EncoderForm({ token, tenantId, mode }) {
         simulcast_facebook: form.simulcast_facebook && facebookConnected,
         simulcast_app: form.simulcast_app,
         vod_recording: form.vod_recording,
+        youtube_broadcast_id: form.youtube_broadcast_id?.trim() || null,
       }
       const res = await fetch('/api/encoders', {
         method: isEdit ? 'PATCH' : 'POST',
@@ -276,6 +277,14 @@ export default function EncoderForm({ token, tenantId, mode }) {
               color="#ff0000"
               disabled={!youtubeConnected}
             />
+            {form.simulcast_youtube && youtubeConnected && (
+              <TextField
+                size="small" label="YouTube Broadcast ID" fullWidth
+                value={form.youtube_broadcast_id || ''} onChange={e => set('youtube_broadcast_id', e.target.value)}
+                placeholder="Persistent liveBroadcast ID bound to this encoder's channel"
+                helperText="Required to go live on YouTube — find it in YouTube Studio for the always-on broadcast tied to this channel."
+              />
+            )}
             <ToggleRow
               label="Facebook"
               hint={facebookConnected ? undefined : 'Connect your Facebook Page in Settings to enable'}

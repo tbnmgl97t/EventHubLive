@@ -10,6 +10,7 @@ import StopIcon             from '@mui/icons-material/Stop'
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord'
 import ContentCopyIcon      from '@mui/icons-material/ContentCopy'
 import CheckIcon            from '@mui/icons-material/Check'
+import CloseIcon            from '@mui/icons-material/Close'
 import VisibilityIcon       from '@mui/icons-material/Visibility'
 import VisibilityOffIcon    from '@mui/icons-material/VisibilityOff'
 import ExpandMoreIcon       from '@mui/icons-material/ExpandMore'
@@ -198,6 +199,37 @@ function DestToggle({ label, color, checked, onChange, disabled, locked }) {
   )
 }
 
+// ── Per-destination go-live results ──
+function GoLiveResultsPanel({ results }) {
+  const entries = results ? Object.entries(results) : []
+  if (!entries.length) return null
+  return (
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2, display: 'flex', flexDirection: 'column', gap: 0.9 }}>
+      <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase' }}>
+        Go-Live Results
+      </Typography>
+      {entries.map(([dest, r]) => (
+        <Box key={dest} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {r.success
+            ? <CheckIcon sx={{ fontSize: 16, color: AP.live, flexShrink: 0 }} />
+            : <CloseIcon sx={{ fontSize: 16, color: AP.danger, flexShrink: 0 }} />}
+          <Typography sx={{ fontSize: '0.8rem', color: AP.text, flex: 1 }}>{DEST_LABELS[dest] || dest}</Typography>
+          {!r.success && r.error && (
+            <Tooltip title={r.error}>
+              <Typography sx={{
+                fontSize: '0.7rem', color: AP.danger, maxWidth: 170,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {r.error}
+              </Typography>
+            </Tooltip>
+          )}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
 // ── Broadcast history table ──
 function BroadcastHistoryTable({ history, loading }) {
   return (
@@ -289,6 +321,9 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
   const [lastBroadcast, setLastBroadcast]   = useState(null)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
 
+  const [goLiveError, setGoLiveError]     = useState('')
+  const [goLiveResults, setGoLiveResults] = useState(null)
+
   const elapsed = useElapsedSeconds(liveStartedAt, broadcastState === 'live')
 
   const fetchEncoder = useCallback(() => {
@@ -353,41 +388,61 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     setTimeout(() => setBroadcastState('preview'), 1000)
   }
 
-  function handleGoLive() {
+  async function handleGoLive() {
     setBroadcastState('going_live')
-    setTimeout(() => {
+    setGoLiveError('')
+    setGoLiveResults(null)
+    const activeDests = Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
+
+    try {
+      const res = await fetch('/api/encoder-go-live', {
+        method: 'POST',
+        headers: authHeader(token, tenantId),
+        body: JSON.stringify({ encoder_id: id, destinations: activeDests }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to go live')
+
+      setGoLiveResults(data.results || null)
       setLiveStartedAt(Date.now())
       setBroadcastState('live')
-    }, 1200)
+    } catch (err) {
+      setGoLiveError(err.message)
+      setBroadcastState('preview')
+    }
   }
 
-  function handleStop() {
+  async function handleStop() {
+    if (!window.confirm('Stop broadcast and clip? This will end the stream on all destinations.')) return
+
     setBroadcastState('stopping')
+    setGoLiveError('')
     const startedAt = liveStartedAt
-    setTimeout(async () => {
-      const endedAt = Date.now()
-      const activeDests = Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
+    const endedAt = Date.now()
+    const activeDests = Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
 
-      try {
-        await fetch('/api/broadcast-history', {
-          method: 'POST',
-          headers: authHeader(token, tenantId),
-          body: JSON.stringify({
-            encoder_id: id,
-            started_at: new Date(startedAt).toISOString(),
-            ended_at:   new Date(endedAt).toISOString(),
-            destinations: activeDests,
-          }),
-        })
-      } catch {
-        // Phase 3 will surface a real error path here — for now the UI just moves on.
-      }
+    try {
+      const res = await fetch('/api/encoder-stop', {
+        method: 'POST',
+        headers: authHeader(token, tenantId),
+        body: JSON.stringify({
+          encoder_id: id,
+          started_at: new Date(startedAt).toISOString(),
+          ended_at:   new Date(endedAt).toISOString(),
+          destinations: activeDests,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to stop broadcast')
+    } catch (err) {
+      setGoLiveError(err.message)
+    }
 
-      setLastBroadcast({ startedAt, endedAt, destinations: activeDests })
-      setLiveStartedAt(null)
-      setBroadcastState('offline')
-      fetchHistory()
-    }, 1200)
+    setLastBroadcast({ startedAt, endedAt, destinations: activeDests, clipping: true })
+    setLiveStartedAt(null)
+    setGoLiveResults(null)
+    setBroadcastState('offline')
+    setTimeout(fetchHistory, 3000)
   }
 
   const uiState = broadcastState === 'starting_preview' || broadcastState === 'going_live' || broadcastState === 'stopping'
@@ -516,6 +571,12 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
         {/* ══ RIGHT — Controls panel (40%) ══ */}
         <Box sx={{ flex: { lg: '2 1 0' }, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
 
+          {goLiveError && (
+            <Alert severity="error" onClose={() => setGoLiveError('')} sx={{ fontSize: '0.8rem' }}>
+              {goLiveError}
+            </Alert>
+          )}
+
           {/* Destinations */}
           <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
             <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase', mb: 0.25 }}>
@@ -589,6 +650,8 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
             )}
           </Box>
 
+          <GoLiveResultsPanel results={goLiveResults} />
+
           {/* Broadcast info */}
           {(broadcastState === 'live' || broadcastState === 'stopping' || lastBroadcast) && (
             <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2, display: 'flex', flexDirection: 'column', gap: 0.9 }}>
@@ -621,7 +684,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
                     {!isLiveNow && lastBroadcast && (
                       <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                         <Typography sx={{ fontSize: '0.78rem', color: AP.muted }}>Clip status</Typography>
-                        <Typography sx={{ fontSize: '0.78rem', color: AP.muted, fontStyle: 'italic' }}>Pending clip…</Typography>
+                        <Typography sx={{ fontSize: '0.78rem', color: AP.muted, fontStyle: 'italic' }}>Clipping in progress…</Typography>
                       </Box>
                     )}
                   </>
