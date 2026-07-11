@@ -1,12 +1,55 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import Hls from 'hls.js'
-import './EncoderControl.css'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import {
+  Box, Typography, Button, CircularProgress, Alert, Chip, IconButton, Switch,
+  Collapse, Table, TableHead, TableBody, TableRow, TableCell, Tooltip,
+} from '@mui/material'
+import ArrowBackIcon        from '@mui/icons-material/ArrowBack'
+import PlayArrowIcon        from '@mui/icons-material/PlayArrow'
+import StopIcon             from '@mui/icons-material/Stop'
+import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord'
+import ContentCopyIcon      from '@mui/icons-material/ContentCopy'
+import CheckIcon            from '@mui/icons-material/Check'
+import VisibilityIcon       from '@mui/icons-material/Visibility'
+import VisibilityOffIcon    from '@mui/icons-material/VisibilityOff'
+import ExpandMoreIcon       from '@mui/icons-material/ExpandMore'
+import ExpandLessIcon       from '@mui/icons-material/ExpandLess'
+import SignalCellularAltIcon from '@mui/icons-material/SignalCellularAlt'
+import MovieFilterIcon      from '@mui/icons-material/MovieFilter'
 
 const JW_PLAYER_ID = 'Sx2qhN0M'
 
-const ENCODER_ACCENT = '#6366f1'
-const ENCODER_GLOW   = 'rgba(99,102,241,0.3)'
+const AP = {
+  accent:    '#6366f1',
+  accentHov: '#4f46e5',
+  accentDim: 'rgba(99,102,241,0.08)',
+  accentBdr: 'rgba(99,102,241,0.3)',
+  live:      '#10b981',
+  warn:      '#f59e0b',
+  warnDim:   'rgba(245,158,11,0.12)',
+  danger:    '#ef4444',
+  dangerDim: 'rgba(239,68,68,0.14)',
+  dangerBdr: 'rgba(239,68,68,0.4)',
+  slate:     '#64748b',
+  slateDim:  'rgba(100,116,139,0.15)',
+  muted:     '#94a3b8',
+  text:      '#e2e8f0',
+  bg:        '#0b0d14',
+  paper:     '#161b2e',
+}
+
+const STATE_CFG = {
+  offline: { label: 'OFFLINE', color: AP.slate,  dim: AP.slateDim,  pulse: false },
+  preview: { label: 'PREVIEW', color: AP.warn,   dim: AP.warnDim,   pulse: false },
+  live:    { label: 'LIVE',    color: AP.danger, dim: AP.dangerDim, pulse: true  },
+}
+
+const INGEST_FORMAT_LABELS = {
+  rtmp: 'RTMP', rtmps: 'RTMPS', srt: 'SRT (Push)', srt_pull: 'SRT (Pull)',
+  hls: 'HLS (Push)', hls_pull: 'HLS (Pull)', rtp: 'RTP', rtp_fec: 'RTP + FEC',
+}
+
+const DEST_LABELS = { website: 'Website', youtube: 'YouTube', facebook: 'Facebook', app: 'App' }
 
 function authHeader(token, tenantId) {
   return {
@@ -16,760 +59,239 @@ function authHeader(token, tenantId) {
   }
 }
 
-/** Maps a DB encoder row to the shape EncoderRow/its children expect. */
-function toEncoderCardData(row) {
-  return {
-    id:         row.id,
-    label:      row.name,
-    description: row.description,
-    accent:     ENCODER_ACCENT,
-    glow:       ENCODER_GLOW,
-    mediaId:    row.channel_id,
-    streamId:   row.channel_id,
-    streamUrl:  `https://cdn.jwplayer.com/live/broadcast/${row.channel_id}.m3u8`,
-    ingestUrl:  row.ingest_url || '',
-  }
+function formatClock(totalSeconds) {
+  const h = String(Math.floor(totalSeconds / 3600)).padStart(2, '0')
+  const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0')
+  const s = String(totalSeconds % 60).padStart(2, '0')
+  return `${h}:${m}:${s}`
 }
 
-function simulateStep(ms = 1800) {
-  return new Promise(res => setTimeout(res, ms))
-}
-
-// ── Timer hook ──
-function useTimer(running) {
-  const [elapsed, setElapsed] = useState(0)
-  const ref = useRef(null)
-
-  useEffect(() => {
-    if (running) {
-      setElapsed(0)
-      ref.current = setInterval(() => setElapsed(s => s + 1), 1000)
-    } else {
-      clearInterval(ref.current)
-      setElapsed(0)
-    }
-    return () => clearInterval(ref.current)
-  }, [running])
-
-  const h = String(Math.floor(elapsed / 3600)).padStart(2, '0')
-  const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0')
-  const s = String(elapsed % 60).padStart(2, '0')
-  return { formatted: `${h}:${m}:${s}`, seconds: elapsed }
-}
-
-function formatDuration(seconds) {
+function formatDurationShort(seconds) {
+  if (seconds == null || Number.isNaN(seconds)) return '—'
   const h = Math.floor(seconds / 3600)
   const m = Math.floor((seconds % 3600) / 60)
-  const s = seconds % 60
-  if (h > 0) return `${h}h ${m}m ${s}s`
+  const s = Math.floor(seconds % 60)
+  if (h > 0) return `${h}h ${m}m`
   if (m > 0) return `${m}m ${s}s`
   return `${s}s`
 }
 
-function formatDate(ts) {
-  return new Date(ts).toLocaleString([], {
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit'
+function formatDateTime(value) {
+  if (!value) return '—'
+  return new Date(value).toLocaleString([], {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
   })
 }
 
-// ── Step Icon ──
-function StepIcon({ status }) {
-  if (status === 'done')    return <div className="ec-step-icon done">✓</div>
-  if (status === 'error')   return <div className="ec-step-icon error">✕</div>
-  if (status === 'running') return <div className="ec-step-icon running" />
-  return <div className="ec-step-icon pending" />
+/** Ticks once a second while `active`, returning elapsed seconds since `startedAtMs`. */
+function useElapsedSeconds(startedAtMs, active) {
+  const [, forceTick] = useState(0)
+  useEffect(() => {
+    if (!active) return
+    const id = setInterval(() => forceTick(t => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [active])
+  if (!active || !startedAtMs) return 0
+  return Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000))
 }
 
-// ── Preview Player (always-on, muted, small) ──
-function PreviewPlayer({ streamUrl, accent, glow, isLive, previewWidth }) {
-  const videoRef = useRef(null)
-  const hlsRef   = useRef(null)
-  const [status, setStatus] = useState('loading')
-
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
-    setStatus('loading')
-
-    if (Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: false, lowLatencyMode: true })
-      hlsRef.current = hls
-      hls.loadSource(streamUrl)
-      hls.attachMedia(video)
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); setStatus('playing') })
-      hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setStatus('error') })
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = streamUrl
-      video.addEventListener('loadedmetadata', () => { video.play().catch(() => {}); setStatus('playing') })
-      video.addEventListener('error', () => setStatus('error'))
-    } else {
-      setStatus('error')
-    }
-
-    return () => {
-      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null }
-      if (video) { video.pause(); video.src = '' }
-    }
-  }, [streamUrl])
-
+// ── Status badge ──
+function StatusBadge({ broadcastState }) {
+  const cfg = STATE_CFG[broadcastState] || STATE_CFG.offline
   return (
-    <div
-      className={`ec-preview-player ${isLive ? 'live' : ''}`}
-      style={{ '--accent': accent, '--glow': glow, width: previewWidth ? `${previewWidth}px` : undefined }}
-    >
-      <div className="ec-preview-player-video-wrap">
-        <video ref={videoRef} muted playsInline style={{ display: status === 'playing' ? 'block' : 'none' }} />
-        {status !== 'playing' && (
-          <div className="ec-preview-player-status">
-            {status === 'loading'
-              ? <><div className="ec-preview-spinner" style={{ '--accent': accent }} /><span>Loading…</span></>
-              : <span>⚠️</span>
-            }
-          </div>
-        )}
-      </div>
-      <div className="ec-preview-player-footer">
-        <span className="ec-preview-footer-label">Preview</span>
-        <div className={`ec-preview-footer-dot ${isLive ? 'live' : ''}`} style={{ '--accent': accent }} />
-      </div>
-    </div>
+    <Box sx={{
+      display: 'flex', alignItems: 'center', gap: 0.75,
+      px: 1.5, py: 0.5, borderRadius: '20px',
+      bgcolor: cfg.dim, border: `1px solid ${cfg.color}55`,
+    }}>
+      <Box sx={{
+        width: 8, height: 8, borderRadius: '50%', bgcolor: cfg.color,
+        boxShadow: `0 0 8px ${cfg.color}`,
+        animation: cfg.pulse ? 'ecPulseDot 1.4s ease-in-out infinite' : 'none',
+        '@keyframes ecPulseDot': { '0%,100%': { opacity: 1, transform: 'scale(1)' }, '50%': { opacity: 0.4, transform: 'scale(0.7)' } },
+      }} />
+      <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.12em', color: cfg.color }}>
+        {cfg.label}
+      </Typography>
+    </Box>
   )
 }
 
-// ── Live Player ──
-function LivePlayer({ mediaId, accent, solo }) {
-  return (
-    <div className={`ec-player-section${solo ? ' solo' : ''}`}>
-      <div className="ec-player-label">
-        <div className="ec-player-label-dot" style={{ '--accent': accent }} />
-        Live Preview
-      </div>
-      <div className="ec-player-wrap" style={{ '--accent': accent }}>
-        <iframe
-          src={`https://cdn.jwplayer.com/players/${mediaId}-${JW_PLAYER_ID}.html?autostart=true&mute=true`}
-          title="Live Preview"
-          frameBorder="0"
-          allow="autoplay; fullscreen"
-          allowFullScreen
-          scrolling="auto"
-        />
-      </div>
-    </div>
-  )
-}
-
-// ── YouTube Mock Player ──
-function YouTubeMockPlayer({ streamUrl }) {
-  const videoRef = useRef(null)
-  const hlsRef   = useRef(null)
-  const [status, setStatus]   = useState('loading')
-  const [viewers, setViewers] = useState(Math.floor(Math.random() * 800) + 120)
-
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
-    setStatus('loading')
-    if (Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: false, lowLatencyMode: true })
-      hlsRef.current = hls
-      hls.loadSource(streamUrl)
-      hls.attachMedia(video)
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); setStatus('playing') })
-      hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setStatus('error') })
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = streamUrl
-      video.addEventListener('loadedmetadata', () => { video.play().catch(() => {}); setStatus('playing') })
-      video.addEventListener('error', () => setStatus('error'))
-    } else { setStatus('error') }
-    return () => {
-      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null }
-      if (video) { video.pause(); video.src = '' }
-    }
-  }, [streamUrl])
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setViewers(v => Math.max(1, v + Math.floor(Math.random() * 15) - 7))
-    }, 4000)
-    return () => clearInterval(interval)
-  }, [])
-
-  return (
-    <div className="ec-yt-player-section">
-      <div className="ec-yt-player-label">
-        <span className="ec-yt-logo">
-          <svg viewBox="0 0 24 17" xmlns="http://www.w3.org/2000/svg">
-            <path d="M23.5 2.7S23.2.9 22.4.2C21.4-.8 20.3-.8 19.8-.8 16.5-1 12-1 12-1s-4.5 0-7.8.2C3.7-.8 2.6-.8 1.6.2.8.9.5 2.7.5 2.7S.2 4.8.2 6.9v1.9c0 2.1.3 4.2.3 4.2s.3 1.8 1.1 2.5c1 1 2.4.97 3 1.07C6.5 16.77 12 16.8 12 16.8s4.5 0 7.8-.2c.5-.08 1.6-.08 2.6-1.08.8-.7 1.1-2.5 1.1-2.5s.3-2.1.3-4.2V6.9C23.8 4.8 23.5 2.7 23.5 2.7z"/>
-            <polygon points="9.5,12 9.5,4.8 16.2,8.4" fill="#fff"/>
-          </svg>
-          YouTube
-        </span>
-        <span style={{ marginLeft: '0.4rem', color: '#475569', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>Live</span>
-      </div>
-      <div className="ec-yt-player-wrap">
-        <video
-          ref={videoRef}
-          muted
-          playsInline
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: status === 'playing' ? 'block' : 'none' }}
-        />
-        {status !== 'playing' && (
-          <div className="ec-yt-mock-screen">
-            {status === 'loading'
-              ? <><div className="ec-player-spinner" style={{ '--accent': '#ff0000' }} /><span style={{ color: '#666', fontSize: '0.8rem' }}>Connecting…</span></>
-              : <span style={{ fontSize: '1.5rem' }}>⚠️</span>
-            }
-          </div>
-        )}
-        {status === 'playing' && (
-          <div style={{ position: 'absolute', top: '0.6rem', right: '0.75rem' }}>
-            <div className="ec-yt-live-badge">
-              <div className="ec-yt-live-dot" />
-              Live
-            </div>
-          </div>
-        )}
-        <div className="ec-yt-controls-bar">
-          <div className="ec-yt-controls-left">
-            <div className="ec-yt-viewer-count">👁 {viewers.toLocaleString()} watching</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const DEST_OPTIONS = [
-  { key: 'website',        label: 'Website' },
-  { key: 'youtubeMain',    label: 'YouTube Main Channel' },
-  { key: 'youtubeWeather', label: 'YouTube Weather Channel' },
-  { key: 'facebook',       label: 'Facebook' },
-  { key: 'app',            label: 'App' },
-]
-
-const EMPTY_DESTS = { website: false, youtubeMain: false, youtubeWeather: false, facebook: false, app: false }
-
-// ── Copy Field ──
-function CopyField({ label, value }) {
-  const [copied, setCopied] = useState(false)
+// ── Copyable value row ──
+function CopyRow({ label, value, mask }) {
+  const [copied, setCopied]     = useState(false)
+  const [revealed, setRevealed] = useState(!mask)
 
   function handleCopy() {
+    if (!value) return
     navigator.clipboard.writeText(value).then(() => {
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      setTimeout(() => setCopied(false), 1800)
     })
   }
 
+  const displayValue = value
+    ? (mask && !revealed ? '•'.repeat(Math.min(28, Math.max(10, value.length))) : value)
+    : '— not configured —'
+
   return (
-    <div className="ec-copy-field">
-      <span className="ec-copy-field-label">{label}</span>
-      <div className="ec-copy-field-row">
-        <span className="ec-copy-field-value">{value}</span>
-        <button className="ec-copy-field-btn" onClick={handleCopy} title={copied ? 'Copied!' : 'Copy'}>
-          {copied
-            ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-            : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          }
-        </button>
-      </div>
-    </div>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.35 }}>
+      <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase' }}>
+        {label}
+      </Typography>
+      <Box sx={{
+        display: 'flex', alignItems: 'center', gap: 0.5,
+        bgcolor: '#0a0c12', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 1.5,
+        px: 1.25, py: 0.75, minWidth: 0,
+      }}>
+        <Typography sx={{
+          flex: 1, minWidth: 0, fontSize: '0.8rem', color: value ? '#4ade80' : AP.muted,
+          fontFamily: "'SF Mono','Fira Code',monospace",
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          {displayValue}
+        </Typography>
+        {mask && value && (
+          <IconButton size="small" onClick={() => setRevealed(r => !r)} sx={{ color: AP.muted, p: 0.4 }}>
+            {revealed ? <VisibilityOffIcon sx={{ fontSize: 15 }} /> : <VisibilityIcon sx={{ fontSize: 15 }} />}
+          </IconButton>
+        )}
+        {value && (
+          <IconButton size="small" onClick={handleCopy} sx={{ color: copied ? AP.live : AP.muted, p: 0.4 }}>
+            {copied ? <CheckIcon sx={{ fontSize: 15 }} /> : <ContentCopyIcon sx={{ fontSize: 15 }} />}
+          </IconButton>
+        )}
+      </Box>
+    </Box>
   )
 }
 
-// ── FAST Channel Player ──
-function FastChannelPlayer() {
+// ── Destination toggle row ──
+function DestToggle({ label, color, checked, onChange, disabled, locked }) {
   return (
-    <div className="ec-fast-channel-section">
-      <div className="ec-fast-channel-header">
-        <div className="ec-fast-channel-title">
-          <div className="ec-fast-channel-dot" />
-          FAST Channel
-        </div>
-        <span className="ec-fast-channel-subtitle">Always-on monitoring feed</span>
-      </div>
-      <div className="ec-fast-channel-player-wrap">
-        <iframe
-          src="https://cdn.jwplayer.com/players/BKRDxhn8-Sx2qhN0M.html?autostart=true&mute=true"
-          title="FAST Channel"
-          frameBorder="0"
-          allow="autoplay; fullscreen"
-          allowFullScreen
-          scrolling="auto"
+    <Box sx={{
+      display: 'flex', alignItems: 'center', gap: 1.25,
+      border: `1px solid ${checked ? `${color}55` : 'rgba(255,255,255,0.08)'}`,
+      borderRadius: 1.5, px: 1.5, py: 1,
+      bgcolor: checked ? `${color}14` : 'rgba(255,255,255,0.02)',
+      opacity: disabled ? 0.45 : 1,
+    }}>
+      <Typography sx={{ flex: 1, fontSize: '0.85rem', fontWeight: 700, color: checked ? '#fff' : AP.muted }}>
+        {label}
+      </Typography>
+      {locked ? (
+        <Chip
+          size="small" label={checked ? 'Sending' : 'Off'}
+          sx={{ height: 20, fontSize: '0.65rem', fontWeight: 700, bgcolor: checked ? `${color}22` : 'rgba(255,255,255,0.06)', color: checked ? color : AP.muted }}
         />
-      </div>
-    </div>
-  )
-}
-
-// ── Go-Live Modal ──
-function GoLiveModal({ encoder, onClose, onComplete }) {
-  const [title, setTitle] = useState('')
-  const [destinations, setDestinations] = useState({ ...EMPTY_DESTS })
-  const [steps, setSteps] = useState(null)
-
-  const accent = encoder.accent
-  const anySelected = Object.values(destinations).some(Boolean)
-
-  function toggleDest(key) {
-    setDestinations(prev => ({ ...prev, [key]: !prev[key] }))
-  }
-
-  function buildSteps(dests) {
-    const list = []
-    if (dests.website) {
-      list.push({ key: 'feed',         label: `Enabling live feed on ${encoder.label} page`,         status: 'pending' })
-      list.push({ key: 'publish',      label: `Publishing the ${encoder.label} page`,                status: 'pending' })
-      list.push({ key: 'videoTitle',   label: `Changing title of ${encoder.label} Video page`,       status: 'pending' })
-      list.push({ key: 'videoPublish', label: `Publishing ${encoder.label} Video page`,              status: 'pending' })
-    }
-    if (dests.youtubeMain)    list.push({ key: 'ytMain',    label: `Publishing ${encoder.label} to Main YouTube`,    status: 'pending' })
-    if (dests.youtubeWeather) list.push({ key: 'ytWeather', label: `Publishing ${encoder.label} to Weather YouTube`, status: 'pending' })
-    if (dests.facebook)       list.push({ key: 'facebook',  label: `Publishing ${encoder.label} to Facebook`,        status: 'pending' })
-    if (dests.app) {
-      list.push({ key: 'appFeed',    label: `Enabling live feed on ${encoder.label} App page`, status: 'pending' })
-      list.push({ key: 'appPublish', label: `Publishing the ${encoder.label} App page`,        status: 'pending' })
-    }
-    return list
-  }
-
-  function setStepStatus(key, status) {
-    setSteps(prev => prev.map(s => s.key === key ? { ...s, status } : s))
-  }
-
-  async function runSteps(stepList) {
-    for (const step of stepList) {
-      setStepStatus(step.key, 'running')
-      await simulateStep(1600)
-      setStepStatus(step.key, 'done')
-    }
-    await new Promise(res => setTimeout(res, 400))
-    onComplete(title, destinations)
-  }
-
-  async function handleStart() {
-    if (!title.trim() || !anySelected) return
-    const list = buildSteps(destinations)
-    setSteps(list)
-    runSteps(list)
-  }
-
-  const allDone = steps && steps.every(s => s.status === 'done')
-
-  return (
-    <div className="ec-overlay" onClick={e => { if (!steps && e.target === e.currentTarget) onClose() }}>
-      <div className="ec-modal" style={{ '--accent': accent }}>
-        {!steps ? (
-          <>
-            <h2>Go Live — {encoder.label}</h2>
-            <div className="ec-form-group">
-              <label>Event Title</label>
-              <input
-                type="text"
-                placeholder="Enter live event title…"
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleStart()}
-                autoFocus
-              />
-            </div>
-            <div className="ec-form-group">
-              <label className="ec-destinations-label">Destinations</label>
-              <div className="ec-destinations-list">
-                {DEST_OPTIONS.map(dest => (
-                  <label key={dest.key} className="ec-checkbox-row">
-                    <input
-                      type="checkbox"
-                      checked={destinations[dest.key]}
-                      onChange={() => toggleDest(dest.key)}
-                    />
-                    <span>{dest.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="ec-modal-actions">
-              <button className="ec-btn-cancel" onClick={onClose}>Cancel</button>
-              <button className="ec-btn-confirm" style={{ background: accent }} onClick={handleStart} disabled={!title.trim() || !anySelected}>
-                Start Broadcasting
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <h2>Broadcasting…</h2>
-            <p className="ec-confirm-title" style={{ color: accent }}>{title}</p>
-            <div className="ec-status-panel">
-              <h3>Status</h3>
-              <div className="ec-status-steps">
-                {steps.map(step => (
-                  <div key={step.key} className="ec-status-step">
-                    <StepIcon status={step.status} />
-                    <span className={`ec-step-label ${step.status}`}>{step.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            {allDone && (
-              <div className="ec-modal-actions">
-                <button className="ec-btn-confirm" style={{ background: accent }} onClick={onClose}>Done</button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── Confirm End Modal ──
-function ConfirmEndModal({ encoder, destinations, onClose, onConfirm }) {
-  const [steps, setSteps] = useState(null)
-
-  function buildSteps() {
-    const list = []
-    if (destinations.website) {
-      list.push({ key: 'videoUnpublish', label: `Unpublishing ${encoder.label} Video page`,                      status: 'pending' })
-      list.push({ key: 'videoTitle',     label: `Setting ${encoder.label} Video page back to default title`,     status: 'pending' })
-      list.push({ key: 'unpublish',      label: `Unpublishing the ${encoder.label} page`,                        status: 'pending' })
-      list.push({ key: 'feed',           label: `Disabling live feed on ${encoder.label} page`,                  status: 'pending' })
-    }
-    if (destinations.youtubeMain)    list.push({ key: 'ytMain',      label: `Unpublishing ${encoder.label} from Main YouTube`,    status: 'pending' })
-    if (destinations.youtubeWeather) list.push({ key: 'ytWeather',   label: `Unpublishing ${encoder.label} from Weather YouTube`, status: 'pending' })
-    if (destinations.facebook)       list.push({ key: 'facebook',    label: `Unpublishing ${encoder.label} from Facebook`,        status: 'pending' })
-    if (destinations.app)            list.push({ key: 'appUnpublish',label: `Unpublishing the ${encoder.label} App page`,         status: 'pending' })
-    return list
-  }
-
-  function setStepStatus(key, status) {
-    setSteps(prev => prev.map(s => s.key === key ? { ...s, status } : s))
-  }
-
-  async function handleConfirm() {
-    const list = buildSteps()
-    setSteps(list)
-    for (const step of list) {
-      setStepStatus(step.key, 'running')
-      await simulateStep(1500)
-      setStepStatus(step.key, 'done')
-    }
-    await new Promise(res => setTimeout(res, 400))
-    onConfirm()
-  }
-
-  const allDone = steps && steps.every(s => s.status === 'done')
-
-  return (
-    <div className="ec-overlay" onClick={e => { if (!steps && e.target === e.currentTarget) onClose() }}>
-      <div className="ec-modal">
-        {!steps ? (
-          <>
-            <h2>End Live Stream?</h2>
-            <p style={{ color: '#94a3b8', marginTop: '0.5rem', fontSize: '0.9rem' }}>
-              This will end the live broadcast on <strong style={{ color: encoder.accent }}>{encoder.label}</strong>. This action cannot be undone.
-            </p>
-            <div className="ec-modal-actions">
-              <button className="ec-btn-cancel" onClick={onClose}>Keep Streaming</button>
-              <button className="ec-btn-confirm ec-btn-danger" onClick={handleConfirm}>End Stream</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <h2>Ending Stream…</h2>
-            <div className="ec-status-panel" style={{ marginTop: '0.5rem' }}>
-              <h3>Status</h3>
-              <div className="ec-status-steps">
-                {steps.map(step => (
-                  <div key={step.key} className="ec-status-step">
-                    <StepIcon status={step.status} />
-                    <span className={`ec-step-label ${step.status}`}>{step.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            {allDone && (
-              <div className="ec-modal-actions">
-                <button className="ec-btn-confirm ec-btn-danger" onClick={onConfirm}>Done</button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── Encoder Row ──
-function EncoderRow({ encoder, onBroadcastEnd, streams247 = [], streamsLoading, selectedStreamId = '', onSelectStream, readOnly }) {
-  const [modal, setModal]           = useState(null)
-  const [isLive, setIsLive]         = useState(false)
-  const [liveTitle, setLiveTitle]   = useState('')
-  const [destinations, setDestinations] = useState({ ...EMPTY_DESTS })
-  const [startedAt, setStartedAt]   = useState(null)
-  const [previewWidth, setPreviewWidth] = useState(null)
-  const cardRef = useRef(null)
-  const { formatted: timerDisplay, seconds: elapsed } = useTimer(isLive)
-
-  useEffect(() => {
-    const card = cardRef.current
-    if (!card) return
-    const observer = new ResizeObserver(entries => {
-      const h = entries[0].contentRect.height
-      if (h > 0) setPreviewWidth(Math.round(h * 16 / 9))
-    })
-    observer.observe(card)
-    return () => observer.disconnect()
-  }, [])
-
-  function handleButtonClick() {
-    setModal(isLive ? 'confirmEnd' : 'goLive')
-  }
-
-  function handleGoLiveComplete(title, dests) {
-    setLiveTitle(title)
-    setDestinations(dests)
-    setStartedAt(Date.now())
-    setIsLive(true)
-    setModal(null)
-  }
-
-  function handleEndStream() {
-    const endedAt = Date.now()
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
-    onBroadcastEnd({ encoder, title: liveTitle, destinations, duration: elapsed, startedAt, endedAt, timezone })
-    setIsLive(false)
-    setLiveTitle('')
-    setDestinations({ ...EMPTY_DESTS })
-    setStartedAt(null)
-    setModal(null)
-  }
-
-  const { accent, glow } = encoder
-  const hasYouTube = destinations.youtubeMain || destinations.youtubeWeather
-
-  const selectedChannel   = streams247.find(ch => ch.id === selectedStreamId) || null
-  const effectiveMediaId  = selectedChannel?.id         || encoder.mediaId
-  const effectiveStreamUrl = selectedChannel?.stream_url || encoder.streamUrl
-  const effectiveStreamId  = selectedChannel?.id         || encoder.streamId
-
-  return (
-    <>
-      <div className="ec-encoder-row-wrapper">
-        <div
-          ref={cardRef}
-          className={`ec-encoder-card ${isLive ? 'live' : ''}`}
-          style={{ '--accent': accent, '--glow': glow }}
-        >
-          <div className="ec-encoder-card-top">
-            <div className="ec-encoder-info">
-              <div className="ec-color-dot" style={{ background: accent }} />
-              <div>
-                <div className="ec-encoder-label">{encoder.label}</div>
-                {isLive && (
-                  <div className="ec-live-badge">
-                    <div className="ec-live-dot" style={{ background: accent }} />
-                    <span className="ec-live-text" style={{ color: accent }}>Live</span>
-                    <span className="ec-live-timer">{timerDisplay}</span>
-                  </div>
-                )}
-                {isLive && liveTitle && (
-                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '0.2rem' }}>{liveTitle}</div>
-                )}
-                {isLive && (
-                  <div className="ec-live-destinations">
-                    {destinations.website        && <span className="ec-live-dest-badge">Website</span>}
-                    {destinations.youtubeMain    && <span className="ec-live-dest-badge yt">▶ YT Main</span>}
-                    {destinations.youtubeWeather && <span className="ec-live-dest-badge yt">▶ YT Weather</span>}
-                    {destinations.facebook       && <span className="ec-live-dest-badge fb">Facebook</span>}
-                    {destinations.app            && <span className="ec-live-dest-badge">App</span>}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <button
-              className={`ec-go-live-btn ${isLive ? 'live' : 'idle'}`}
-              style={isLive ? { borderColor: accent, color: accent } : { background: accent }}
-              onClick={handleButtonClick}
-              disabled={readOnly}
-              title={readOnly ? 'Read-only access — cannot start or stop streams' : undefined}
-            >
-              {isLive ? '⏹ End Stream' : `Go Live on ${encoder.label}`}
-            </button>
-          </div>
-
-          {!isLive && (
-            <div className="ec-stream-credentials">
-              <div className="ec-stream-select-row">
-                <span className="ec-copy-field-label">24/7 STREAM</span>
-                <select
-                  className="ec-stream-select"
-                  value={selectedStreamId}
-                  onChange={e => onSelectStream(e.target.value)}
-                >
-                  <option value="">{streamsLoading ? 'Loading streams…' : 'Default preview'}</option>
-                  {streams247.map(ch => (
-                    <option key={ch.id} value={ch.id}>{ch.name}</option>
-                  ))}
-                </select>
-              </div>
-              <CopyField label="Stream ID" value={effectiveStreamId} />
-              <CopyField label="Stream URL" value={encoder.ingestUrl} />
-            </div>
-          )}
-
-          {isLive && !hasYouTube && (
-            <LivePlayer mediaId={effectiveMediaId} accent={accent} solo />
-          )}
-          {isLive && hasYouTube && (
-            <div className="ec-players-row">
-              <LivePlayer mediaId={effectiveMediaId} accent={accent} />
-              <YouTubeMockPlayer streamUrl={effectiveStreamUrl} />
-            </div>
-          )}
-        </div>
-
-        {!isLive && (
-          <PreviewPlayer
-            streamUrl={effectiveStreamUrl}
-            accent={accent}
-            glow={glow}
-            isLive={isLive}
-            previewWidth={previewWidth}
-          />
-        )}
-      </div>
-
-      {modal === 'goLive' && (
-        <GoLiveModal encoder={encoder} onClose={() => setModal(null)} onComplete={handleGoLiveComplete} />
+      ) : (
+        <Switch
+          checked={checked} disabled={disabled} onChange={e => onChange(e.target.checked)} size="small"
+          sx={{
+            '& .MuiSwitch-switchBase.Mui-checked': { color },
+            '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { bgcolor: color },
+          }}
+        />
       )}
-      {modal === 'confirmEnd' && (
-        <ConfirmEndModal encoder={encoder} destinations={destinations} onClose={() => setModal(null)} onConfirm={handleEndStream} />
-      )}
-    </>
+    </Box>
   )
 }
 
-// ── Live Stream History ──
-function BroadcastHistory({ history, onClear, loading }) {
-  const [confirming, setConfirming] = useState(false)
-  const [page, setPage] = useState(1)
-  const PER_PAGE = 5
-
-  const totalPages = Math.max(1, Math.ceil(history.length / PER_PAGE))
-  const safePage   = Math.min(page, totalPages)
-  const pageItems  = history.slice((safePage - 1) * PER_PAGE, safePage * PER_PAGE)
-
-  useEffect(() => { setPage(1) }, [history.length])
-
-  function pageNumbers() {
-    const pages = []
-    for (let i = 1; i <= totalPages; i++) {
-      if (i === 1 || i === totalPages || Math.abs(i - safePage) <= 1) {
-        pages.push(i)
-      } else if (pages[pages.length - 1] !== '…') {
-        pages.push('…')
-      }
-    }
-    return pages
-  }
-
-  if (loading) {
-    return (
-      <div className="ec-history-section">
-        <div className="ec-history-header"><h2>Live Stream History</h2></div>
-        <div className="ec-history-empty" style={{ color: '#475569' }}>
-          <span style={{ display: 'inline-block', animation: 'ec-pulse 1.2s ease-in-out infinite' }}>Loading history…</span>
-        </div>
-      </div>
-    )
-  }
-
-  if (history.length === 0) {
-    return (
-      <div className="ec-history-section">
-        <div className="ec-history-header"><h2>Live Stream History</h2></div>
-        <div className="ec-history-empty">No broadcasts yet</div>
-      </div>
-    )
-  }
-
+// ── Broadcast history table ──
+function BroadcastHistoryTable({ history, loading }) {
   return (
-    <div className="ec-history-section">
-      {confirming && (
-        <div className="ec-overlay" onClick={() => setConfirming(false)}>
-          <div className="ec-modal" onClick={e => e.stopPropagation()}>
-            <h2>Clear History?</h2>
-            <p style={{ color: '#94a3b8', marginTop: '0.5rem', fontSize: '0.9rem' }}>
-              This will permanently remove all broadcast history. This action cannot be undone.
-            </p>
-            <div className="ec-modal-actions">
-              <button className="ec-btn-cancel" onClick={() => setConfirming(false)}>Cancel</button>
-              <button className="ec-btn-confirm ec-btn-danger" onClick={() => { setConfirming(false); onClear() }}>Clear History</button>
-            </div>
-          </div>
-        </div>
-      )}
-      <div className="ec-history-header">
-        <h2>Live Stream History</h2>
-        <button className="ec-btn-clear" onClick={() => setConfirming(true)}>Clear History</button>
-      </div>
-      <div className="ec-history-list">
-        {pageItems.map((item, i) => (
-          <div key={i} className="ec-history-item">
-            <div className="ec-history-color-dot" style={{ background: item.encoder.accent }} />
-            <div className="ec-history-info">
-              <div className="ec-history-title">{item.title}</div>
-              <div className="ec-history-meta">
-                <span className="ec-history-encoder" style={{ color: item.encoder.accent }}>{item.encoder.label}</span>
-                <span className="ec-history-duration">⏱ {formatDuration(item.duration)}</span>
-                {item.startedAt && <span className="ec-history-date">▶ {formatDate(item.startedAt)}</span>}
-                <span className="ec-history-date">⏹ {formatDate(item.endedAt)}</span>
-                {item.timezone && <span className="ec-history-timezone">{item.timezone}</span>}
-                {item.destinations?.website        && <span className="ec-history-dest-badge">Website</span>}
-                {item.destinations?.youtubeMain    && <span className="ec-history-yt-badge">▶ YT Main</span>}
-                {item.destinations?.youtubeWeather && <span className="ec-history-yt-badge">▶ YT Weather</span>}
-                {item.destinations?.facebook       && <span className="ec-history-dest-badge">Facebook</span>}
-                {item.destinations?.app            && <span className="ec-history-dest-badge">App</span>}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+    <Box sx={{ mt: 4 }}>
+      <Typography sx={{ fontSize: '0.85rem', fontWeight: 800, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase', mb: 1.5 }}>
+        Broadcast History
+      </Typography>
 
-      {totalPages > 1 && (
-        <div className="ec-pagination">
-          <button className="ec-page-btn" onClick={() => setPage(p => p - 1)} disabled={safePage === 1}>‹</button>
-          {pageNumbers().map((p, i) =>
-            p === '…'
-              ? <span key={`ellipsis-${i}`} className="ec-page-info">…</span>
-              : <button key={p} className={`ec-page-btn ${p === safePage ? 'active' : ''}`} onClick={() => setPage(p)}>{p}</button>
-          )}
-          <button className="ec-page-btn" onClick={() => setPage(p => p + 1)} disabled={safePage === totalPages}>›</button>
-        </div>
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 5 }}>
+          <CircularProgress size={24} sx={{ color: AP.accent }} />
+        </Box>
+      ) : history.length === 0 ? (
+        <Box sx={{
+          border: '1px dashed rgba(255,255,255,0.15)', borderRadius: 2, p: 4,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
+        }}>
+          <MovieFilterIcon sx={{ fontSize: 28, color: AP.muted, opacity: 0.6 }} />
+          <Typography sx={{ fontSize: '0.85rem', color: AP.muted }}>No broadcasts yet for this encoder.</Typography>
+        </Box>
+      ) : (
+        <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow sx={{ '& th': { borderColor: 'rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.03)' } }}>
+                <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Date / Time</TableCell>
+                <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Duration</TableCell>
+                <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Destinations</TableCell>
+                <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Title</TableCell>
+                <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Clip</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {history.map(row => {
+                const durationSec = row.started_at && row.ended_at
+                  ? Math.max(0, (new Date(row.ended_at) - new Date(row.started_at)) / 1000)
+                  : null
+                const dests = Array.isArray(row.destinations) ? row.destinations : []
+                return (
+                  <TableRow key={row.id} sx={{ '& td': { borderColor: 'rgba(255,255,255,0.06)' } }}>
+                    <TableCell sx={{ fontSize: '0.8rem', color: AP.text }}>{formatDateTime(row.started_at)}</TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem', color: AP.text }}>{formatDurationShort(durationSec)}</TableCell>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                        {dests.length === 0
+                          ? <Typography sx={{ fontSize: '0.72rem', color: 'rgba(148,163,184,0.4)' }}>—</Typography>
+                          : dests.map(d => (
+                            <Chip key={d} label={DEST_LABELS[d] || d} size="small"
+                              sx={{ height: 19, fontSize: '0.63rem', fontWeight: 600, bgcolor: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }} />
+                          ))}
+                      </Box>
+                    </TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem', color: AP.text }}>{row.title || '—'}</TableCell>
+                    <TableCell>
+                      {row.jw_clip_id ? (
+                        <Chip label="Ready" size="small" sx={{ height: 19, fontSize: '0.63rem', fontWeight: 700, bgcolor: 'rgba(16,185,129,0.15)', color: AP.live }} />
+                      ) : (
+                        <Typography sx={{ fontSize: '0.75rem', color: AP.muted, fontStyle: 'italic' }}>Pending clip…</Typography>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </Box>
       )}
-    </div>
+    </Box>
   )
 }
 
-// ── Encoder Control ──
 export default function EncoderControl({ token, tenantId, readOnly }) {
   const { id } = useParams()
   const navigate = useNavigate()
 
-  const [encoderRow, setEncoderRow]     = useState(null)
+  const [encoder, setEncoder]           = useState(null)
   const [encoderLoading, setEncoderLoading] = useState(true)
   const [encoderError, setEncoderError] = useState('')
 
-  const [history, setHistory]           = useState([])
-  const [historyLoading, setHistoryLoading] = useState(true)
-  const [streams247, setStreams247]         = useState([])
-  const [streamsLoading, setStreamsLoading] = useState(true)
-  const [streamSelections, setStreamSelections] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('encoderStreamSelections') || '{}') } catch { return {} }
-  })
+  const [youtubeConnected, setYoutubeConnected]   = useState(false)
+  const [facebookConnected, setFacebookConnected] = useState(false)
 
-  useEffect(() => {
+  const [history, setHistory]             = useState([])
+  const [historyLoading, setHistoryLoading] = useState(true)
+
+  const [broadcastState, setBroadcastState] = useState('offline') // offline | starting_preview | preview | going_live | live | stopping
+  const [destinations, setDestinations]     = useState({ website: true, youtube: false, facebook: false, app: false })
+  const [liveStartedAt, setLiveStartedAt]   = useState(null)
+  const [lastBroadcast, setLastBroadcast]   = useState(null)
+  const [credentialsOpen, setCredentialsOpen] = useState(false)
+
+  const elapsed = useElapsedSeconds(liveStartedAt, broadcastState === 'live')
+
+  const fetchEncoder = useCallback(() => {
     if (!token || !tenantId || !id) { setEncoderLoading(false); return }
     setEncoderLoading(true)
     setEncoderError('')
@@ -779,95 +301,365 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
         if (!r.ok) throw new Error(data.error || 'Failed to load encoder')
         return data
       })
-      .then(data => setEncoderRow(data))
+      .then(setEncoder)
       .catch(err => setEncoderError(err.message))
       .finally(() => setEncoderLoading(false))
   }, [token, tenantId, id])
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      try {
-        const saved = localStorage.getItem('encoderBroadcastHistory')
-        if (saved) setHistory(JSON.parse(saved))
-      } catch {}
-      setHistoryLoading(false)
-    }, 400)
-    return () => clearTimeout(timer)
-  }, [])
+  useEffect(() => { fetchEncoder() }, [fetchEncoder])
 
   useEffect(() => {
-    if (!token || !tenantId) { setStreamsLoading(false); return }
-    fetch('/api/channels', { headers: { Authorization: `Bearer ${token}`, 'X-Tenant-Id': tenantId } })
-      .then(r => r.ok ? r.json() : { channels: [] })
-      .then(data => setStreams247((data.channels || []).filter(ch => ch.stream_type === '24/7')))
-      .catch(() => setStreams247([]))
-      .finally(() => setStreamsLoading(false))
+    if (!token) return
+    fetch('/api/youtube-status', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setYoutubeConnected(!!data?.connected))
+      .catch(() => setYoutubeConnected(false))
+    fetch('/api/facebook-status', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setFacebookConnected(!!data?.connected))
+      .catch(() => setFacebookConnected(false))
   }, [token, tenantId])
 
-  function handleBroadcastEnd(entry) {
-    setHistory(prev => {
-      const next = [entry, ...prev]
-      localStorage.setItem('encoderBroadcastHistory', JSON.stringify(next))
-      return next
+  const fetchHistory = useCallback(() => {
+    if (!token || !tenantId || !id) { setHistoryLoading(false); return }
+    setHistoryLoading(true)
+    fetch(`/api/broadcast-history?encoder_id=${encodeURIComponent(id)}`, { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : { history: [] })
+      .then(data => setHistory(data.history || []))
+      .catch(() => setHistory([]))
+      .finally(() => setHistoryLoading(false))
+  }, [token, tenantId, id])
+
+  useEffect(() => { fetchHistory() }, [fetchHistory])
+
+  // Seed destination defaults from the encoder's configured simulcast targets, once loaded.
+  useEffect(() => {
+    if (!encoder) return
+    setDestinations({
+      website:  encoder.simulcast_website ?? true,
+      youtube:  !!(encoder.simulcast_youtube && youtubeConnected),
+      facebook: !!(encoder.simulcast_facebook && facebookConnected),
+      app:      !!encoder.simulcast_app,
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [encoder?.id, youtubeConnected, facebookConnected])
+
+  function toggleDest(key, value) {
+    setDestinations(prev => ({ ...prev, [key]: value }))
   }
 
-  function handleClearHistory() {
-    localStorage.removeItem('encoderBroadcastHistory')
-    setHistory([])
+  function handleStartPreview() {
+    setBroadcastState('starting_preview')
+    setTimeout(() => setBroadcastState('preview'), 1000)
   }
 
-  function handleSelectStream(encoderId, channelId) {
-    setStreamSelections(prev => {
-      const next = { ...prev, [encoderId]: channelId || undefined }
-      if (!channelId) delete next[encoderId]
-      localStorage.setItem('encoderStreamSelections', JSON.stringify(next))
-      return next
-    })
+  function handleGoLive() {
+    setBroadcastState('going_live')
+    setTimeout(() => {
+      setLiveStartedAt(Date.now())
+      setBroadcastState('live')
+    }, 1200)
   }
+
+  function handleStop() {
+    setBroadcastState('stopping')
+    const startedAt = liveStartedAt
+    setTimeout(async () => {
+      const endedAt = Date.now()
+      const activeDests = Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
+
+      try {
+        await fetch('/api/broadcast-history', {
+          method: 'POST',
+          headers: authHeader(token, tenantId),
+          body: JSON.stringify({
+            encoder_id: id,
+            started_at: new Date(startedAt).toISOString(),
+            ended_at:   new Date(endedAt).toISOString(),
+            destinations: activeDests,
+          }),
+        })
+      } catch {
+        // Phase 3 will surface a real error path here — for now the UI just moves on.
+      }
+
+      setLastBroadcast({ startedAt, endedAt, destinations: activeDests })
+      setLiveStartedAt(null)
+      setBroadcastState('offline')
+      fetchHistory()
+    }, 1200)
+  }
+
+  const uiState = broadcastState === 'starting_preview' || broadcastState === 'going_live' || broadcastState === 'stopping'
+    ? { starting_preview: 'offline', going_live: 'preview', stopping: 'live' }[broadcastState]
+    : broadcastState
+
+  const anyDestSelected = Object.values(destinations).some(Boolean)
+  const destsLocked = broadcastState === 'live' || broadcastState === 'stopping' || broadcastState === 'going_live'
+
+  const mediaId   = encoder?.channel_id
+  const embedUrl  = mediaId ? `https://cdn.jwplayer.com/players/${mediaId}-${JW_PLAYER_ID}.html?autostart=true&mute=true` : null
 
   if (encoderLoading) {
     return (
-      <div className="ec-root">
-        <div className="ec-header-loading">Loading encoder…</div>
-      </div>
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+        <CircularProgress sx={{ color: AP.accent }} />
+      </Box>
     )
   }
 
-  if (encoderError || !encoderRow) {
+  if (encoderError || !encoder) {
     return (
-      <div className="ec-root">
-        <div className="ec-header-error">
-          {encoderError || 'Encoder not found.'}
-          <button className="ec-back-link" onClick={() => navigate('/admin/encoders')}>← Back to Encoders</button>
-        </div>
-      </div>
+      <Box sx={{ py: 4 }}>
+        <Alert severity="error" sx={{ mb: 2 }}>{encoderError || 'Encoder not found.'}</Alert>
+        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/admin/encoders')} sx={{ color: AP.accent }}>
+          Back to Encoders
+        </Button>
+      </Box>
     )
   }
-
-  const encoder = toEncoderCardData(encoderRow)
 
   return (
-    <div className="ec-root">
-      <div className="ec-page-header">
-        <button className="ec-back-link" onClick={() => navigate('/admin/encoders')}>← Back to Encoders</button>
-        <h1 className="ec-page-title">{encoder.label}</h1>
-        {encoder.description && <p className="ec-page-subtitle">{encoder.description}</p>}
-      </div>
-      <div className="ec-encoders">
-        <EncoderRow
-          key={encoder.id}
-          encoder={encoder}
-          onBroadcastEnd={handleBroadcastEnd}
-          streams247={streams247}
-          streamsLoading={streamsLoading}
-          selectedStreamId={streamSelections[encoder.id] || ''}
-          onSelectStream={channelId => handleSelectStream(encoder.id, channelId)}
-          readOnly={readOnly}
-        />
-      </div>
-      <FastChannelPlayer />
-      <BroadcastHistory history={history} onClear={handleClearHistory} loading={historyLoading} />
-    </div>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {/* ── Header bar ── */}
+      <Box sx={{
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5,
+        pb: 2, borderBottom: '1px solid rgba(255,255,255,0.08)',
+      }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Button
+            size="small" startIcon={<ArrowBackIcon sx={{ fontSize: 14 }} />}
+            onClick={() => navigate('/admin/encoders')}
+            sx={{ color: AP.muted, fontSize: '0.72rem', px: 0, mb: 0.5, '&:hover': { bgcolor: 'transparent', color: AP.accent } }}
+          >
+            Encoders
+          </Button>
+          <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.04em', fontSize: '1.6rem', color: '#fff', lineHeight: 1.1 }}>
+            {encoder.name}
+          </Typography>
+          <Typography sx={{ fontSize: '0.8rem', color: AP.muted, mt: 0.25 }}>
+            {encoder.channel_name || encoder.channel_id}
+          </Typography>
+        </Box>
+
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          {broadcastState === 'live' && (
+            <Typography sx={{ fontSize: '1.1rem', fontWeight: 700, color: AP.danger, fontFamily: "'SF Mono','Fira Code',monospace" }}>
+              {formatClock(elapsed)}
+            </Typography>
+          )}
+          <StatusBadge broadcastState={uiState} />
+        </Box>
+      </Box>
+
+      {/* ── Main area — two columns ── */}
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', lg: 'row' }, gap: 2.5 }}>
+
+        {/* ══ LEFT — Preview monitor (60%) ══ */}
+        <Box sx={{ flex: { lg: '3 1 0' }, minWidth: 0 }}>
+          <Box sx={{
+            position: 'relative', width: '100%', aspectRatio: '16 / 9',
+            bgcolor: '#000', borderRadius: 2, overflow: 'hidden',
+            border: `1px solid ${broadcastState === 'live' ? AP.dangerBdr : 'rgba(255,255,255,0.08)'}`,
+            boxShadow: broadcastState === 'live' ? `0 0 0 1px ${AP.dangerBdr}, 0 4px 30px -6px rgba(239,68,68,0.35)` : 'none',
+          }}>
+            {embedUrl ? (
+              <Box component="iframe" src={embedUrl} title="Preview monitor"
+                sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+                allow="autoplay; fullscreen" allowFullScreen scrolling="auto"
+              />
+            ) : (
+              <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.85rem' }}>No 24/7 channel assigned</Typography>
+              </Box>
+            )}
+
+            {/* Top-left status overlay */}
+            <Box sx={{ position: 'absolute', top: 12, left: 12, zIndex: 2 }}>
+              {broadcastState === 'live' ? (
+                <Box sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.6,
+                  bgcolor: 'rgba(239,68,68,0.9)', px: 1.1, py: 0.4, borderRadius: '4px',
+                }}>
+                  <FiberManualRecordIcon sx={{
+                    fontSize: 11, color: '#fff',
+                    animation: 'ecLiveDotPulse 1.2s ease-in-out infinite',
+                    '@keyframes ecLiveDotPulse': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.3 } },
+                  }} />
+                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.08em', color: '#fff' }}>LIVE</Typography>
+                </Box>
+              ) : (
+                <Box sx={{
+                  bgcolor: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.15)', backdropFilter: 'blur(4px)',
+                  px: 1.1, py: 0.4, borderRadius: '4px',
+                }}>
+                  <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.75)' }}>
+                    PREVIEW
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+
+            {/* Top-right signal quality indicator */}
+            <Box sx={{
+              position: 'absolute', top: 12, right: 12, zIndex: 2,
+              display: 'flex', alignItems: 'center', gap: 0.5,
+              bgcolor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
+              border: '1px solid rgba(255,255,255,0.1)', borderRadius: '20px', px: 1, py: 0.35,
+            }}>
+              <SignalCellularAltIcon sx={{ fontSize: 14, color: AP.live }} />
+              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: AP.live }}>Healthy</Typography>
+            </Box>
+          </Box>
+        </Box>
+
+        {/* ══ RIGHT — Controls panel (40%) ══ */}
+        <Box sx={{ flex: { lg: '2 1 0' }, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+
+          {/* Destinations */}
+          <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase', mb: 0.25 }}>
+              Destinations
+            </Typography>
+            <DestToggle label="Website (BrightSpot)" color={AP.live} checked={destinations.website}
+              onChange={v => toggleDest('website', v)} disabled={readOnly || destsLocked} locked={destsLocked} />
+            {youtubeConnected && (
+              <DestToggle label="YouTube" color="#ff0000" checked={destinations.youtube}
+                onChange={v => toggleDest('youtube', v)} disabled={readOnly || destsLocked} locked={destsLocked} />
+            )}
+            {facebookConnected && (
+              <DestToggle label="Facebook" color="#1877F2" checked={destinations.facebook}
+                onChange={v => toggleDest('facebook', v)} disabled={readOnly || destsLocked} locked={destsLocked} />
+            )}
+            <DestToggle label="App (MRSS)" color={AP.accent} checked={destinations.app}
+              onChange={v => toggleDest('app', v)} disabled={readOnly || destsLocked} locked={destsLocked} />
+          </Box>
+
+          {/* Go Live section */}
+          <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+            {broadcastState === 'offline' && (
+              <Button
+                fullWidth variant="contained" startIcon={<PlayArrowIcon />}
+                onClick={handleStartPreview} disabled={readOnly}
+                sx={{ bgcolor: AP.warn, color: '#1a1200', fontWeight: 800, py: 1.1, '&:hover': { bgcolor: '#d97706' } }}
+              >
+                Start Preview
+              </Button>
+            )}
+
+            {broadcastState === 'starting_preview' && (
+              <Button fullWidth variant="contained" disabled
+                sx={{ bgcolor: AP.warn, color: '#1a1200', fontWeight: 800, py: 1.1, opacity: 0.7 }}
+              >
+                <CircularProgress size={16} sx={{ color: '#1a1200', mr: 1 }} /> Starting preview…
+              </Button>
+            )}
+
+            {(broadcastState === 'preview' || broadcastState === 'going_live') && (
+              <Button
+                fullWidth variant="contained" startIcon={broadcastState === 'going_live' ? null : <FiberManualRecordIcon />}
+                onClick={handleGoLive} disabled={readOnly || broadcastState === 'going_live' || !anyDestSelected}
+                sx={{
+                  bgcolor: AP.danger, color: '#fff', fontWeight: 800, py: 1.3, fontSize: '1rem', letterSpacing: '0.04em',
+                  '&:hover': { bgcolor: '#dc2626' }, '&.Mui-disabled': { bgcolor: 'rgba(239,68,68,0.35)', color: 'rgba(255,255,255,0.5)' },
+                }}
+              >
+                {broadcastState === 'going_live' ? (<><CircularProgress size={16} sx={{ color: '#fff', mr: 1 }} /> Going live…</>) : 'GO LIVE'}
+              </Button>
+            )}
+            {broadcastState === 'preview' && !anyDestSelected && (
+              <Typography sx={{ fontSize: '0.7rem', color: AP.warn, textAlign: 'center' }}>Select at least one destination to go live.</Typography>
+            )}
+
+            {(broadcastState === 'live' || broadcastState === 'stopping') && (
+              <>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, py: 0.5 }}>
+                  <Typography sx={{ fontSize: '1.4rem', fontWeight: 800, color: AP.danger, fontFamily: "'SF Mono','Fira Code',monospace" }}>
+                    {formatClock(elapsed)}
+                  </Typography>
+                </Box>
+                <Button
+                  fullWidth variant="contained" startIcon={<StopIcon />}
+                  onClick={handleStop} disabled={readOnly || broadcastState === 'stopping'}
+                  sx={{ bgcolor: '#7f1d1d', color: '#fecaca', fontWeight: 800, py: 1.1, '&:hover': { bgcolor: '#991b1b' } }}
+                >
+                  {broadcastState === 'stopping' ? (<><CircularProgress size={16} sx={{ color: '#fecaca', mr: 1 }} /> Ending broadcast…</>) : 'STOP BROADCAST'}
+                </Button>
+              </>
+            )}
+          </Box>
+
+          {/* Broadcast info */}
+          {(broadcastState === 'live' || broadcastState === 'stopping' || lastBroadcast) && (
+            <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2, display: 'flex', flexDirection: 'column', gap: 0.9 }}>
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase' }}>
+                Broadcast Info
+              </Typography>
+              {(() => {
+                const isLiveNow = broadcastState === 'live' || broadcastState === 'stopping'
+                const startedAt = isLiveNow ? liveStartedAt : lastBroadcast?.startedAt
+                const activeDests = isLiveNow
+                  ? Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
+                  : (lastBroadcast?.destinations || [])
+                return (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <Typography sx={{ fontSize: '0.78rem', color: AP.muted }}>Start time</Typography>
+                      <Typography sx={{ fontSize: '0.78rem', color: AP.text }}>{startedAt ? formatDateTime(startedAt) : '—'}</Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Typography sx={{ fontSize: '0.78rem', color: AP.muted }}>Active destinations</Typography>
+                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {activeDests.length === 0
+                          ? <Typography sx={{ fontSize: '0.78rem', color: AP.text }}>—</Typography>
+                          : activeDests.map(d => (
+                            <Chip key={d} label={DEST_LABELS[d] || d} size="small"
+                              sx={{ height: 20, fontSize: '0.65rem', fontWeight: 600, bgcolor: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }} />
+                          ))}
+                      </Box>
+                    </Box>
+                    {!isLiveNow && lastBroadcast && (
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Typography sx={{ fontSize: '0.78rem', color: AP.muted }}>Clip status</Typography>
+                        <Typography sx={{ fontSize: '0.78rem', color: AP.muted, fontStyle: 'italic' }}>Pending clip…</Typography>
+                      </Box>
+                    )}
+                  </>
+                )
+              })()}
+            </Box>
+          )}
+
+          {/* Encoder credentials */}
+          <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
+            <Box
+              onClick={() => setCredentialsOpen(o => !o)}
+              sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 2, cursor: 'pointer', '&:hover': { bgcolor: 'rgba(255,255,255,0.02)' } }}
+            >
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase' }}>
+                Encoder Credentials
+              </Typography>
+              <IconButton size="small" sx={{ color: AP.muted, p: 0.3 }}>
+                {credentialsOpen ? <ExpandLessIcon sx={{ fontSize: 18 }} /> : <ExpandMoreIcon sx={{ fontSize: 18 }} />}
+              </IconButton>
+            </Box>
+            <Collapse in={credentialsOpen}>
+              <Box sx={{ px: 2, pb: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+                <CopyRow label="Ingest URL" value={encoder.ingest_url} />
+                <CopyRow label="Stream Key" value={encoder.stream_key} mask />
+                <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 0.25 }}>
+                  <Chip label={INGEST_FORMAT_LABELS[encoder.ingest_format] || encoder.ingest_format} size="small"
+                    sx={{ height: 22, fontSize: '0.68rem', fontWeight: 700, bgcolor: AP.accentDim, color: AP.accent, border: `1px solid ${AP.accentBdr}` }} />
+                  <Chip label={encoder.region} size="small"
+                    sx={{ height: 22, fontSize: '0.68rem', fontWeight: 700, bgcolor: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }} />
+                </Box>
+              </Box>
+            </Collapse>
+          </Box>
+        </Box>
+      </Box>
+
+      <BroadcastHistoryTable history={history} loading={historyLoading} />
+    </Box>
   )
 }
