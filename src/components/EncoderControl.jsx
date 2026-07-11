@@ -3,9 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   Box, Typography, Button, CircularProgress, Alert, Chip, IconButton, Switch,
   Collapse, Table, TableHead, TableBody, TableRow, TableCell, Tooltip,
+  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material'
 import ArrowBackIcon        from '@mui/icons-material/ArrowBack'
-import PlayArrowIcon        from '@mui/icons-material/PlayArrow'
 import StopIcon             from '@mui/icons-material/Stop'
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord'
 import ContentCopyIcon      from '@mui/icons-material/ContentCopy'
@@ -154,12 +154,12 @@ function CopyRow({ label, value, mask }) {
           {displayValue}
         </Typography>
         {mask && value && (
-          <IconButton size="small" onClick={() => setRevealed(r => !r)} sx={{ color: AP.muted, p: 0.4 }}>
+          <IconButton size="small" onClick={() => setRevealed(r => !r)} sx={{ color: AP.muted, p: { xs: 1, sm: 0.4 } }}>
             {revealed ? <VisibilityOffIcon sx={{ fontSize: 15 }} /> : <VisibilityIcon sx={{ fontSize: 15 }} />}
           </IconButton>
         )}
         {value && (
-          <IconButton size="small" onClick={handleCopy} sx={{ color: copied ? AP.live : AP.muted, p: 0.4 }}>
+          <IconButton size="small" onClick={handleCopy} sx={{ color: copied ? AP.live : AP.muted, p: { xs: 1, sm: 0.4 } }}>
             {copied ? <CheckIcon sx={{ fontSize: 15 }} /> : <ContentCopyIcon sx={{ fontSize: 15 }} />}
           </IconButton>
         )}
@@ -252,6 +252,7 @@ function BroadcastHistoryTable({ history, loading }) {
         </Box>
       ) : (
         <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
+          <Box sx={{ overflowX: 'auto' }}>
           <Table size="small">
             <TableHead>
               <TableRow sx={{ '& th': { borderColor: 'rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.03)' } }}>
@@ -295,6 +296,7 @@ function BroadcastHistoryTable({ history, loading }) {
               })}
             </TableBody>
           </Table>
+          </Box>
         </Box>
       )}
     </Box>
@@ -315,11 +317,12 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
   const [history, setHistory]             = useState([])
   const [historyLoading, setHistoryLoading] = useState(true)
 
-  const [broadcastState, setBroadcastState] = useState('offline') // offline | starting_preview | preview | going_live | live | stopping
+  const [broadcastState, setBroadcastState] = useState('preview') // preview | going_live | live | stopping
   const [destinations, setDestinations]     = useState({ website: true, youtube: false, facebook: false, app: false })
   const [liveStartedAt, setLiveStartedAt]   = useState(null)
   const [lastBroadcast, setLastBroadcast]   = useState(null)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
+  const [confirmStopOpen, setConfirmStopOpen] = useState(false)
 
   const [goLiveError, setGoLiveError]     = useState('')
   const [goLiveResults, setGoLiveResults] = useState(null)
@@ -393,11 +396,6 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     setDestinations(prev => ({ ...prev, [key]: value }))
   }
 
-  function handleStartPreview() {
-    setBroadcastState('starting_preview')
-    setTimeout(() => setBroadcastState('preview'), 1000)
-  }
-
   async function handleGoLive() {
     setBroadcastState('going_live')
     setGoLiveError('')
@@ -424,8 +422,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
   }
 
   async function handleStop() {
-    if (!window.confirm('Stop broadcast and clip? This will end the stream on all destinations.')) return
-
+    setConfirmStopOpen(false)
     setBroadcastState('stopping')
     setGoLiveError('')
     const startedAt = liveStartedAt
@@ -453,12 +450,12 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     setLastBroadcast({ startedAt, endedAt, destinations: activeDests, clipping: true })
     setLiveStartedAt(null)
     setGoLiveResults(null)
-    setBroadcastState('offline')
+    setBroadcastState('preview')
     setTimeout(fetchHistory, 3000)
   }
 
-  const uiState = broadcastState === 'starting_preview' || broadcastState === 'going_live' || broadcastState === 'stopping'
-    ? { starting_preview: 'offline', going_live: 'preview', stopping: 'live' }[broadcastState]
+  const uiState = broadcastState === 'going_live' || broadcastState === 'stopping'
+    ? { going_live: 'preview', stopping: 'live' }[broadcastState]
     : broadcastState
 
   const anyDestSelected = Object.values(destinations).some(Boolean)
@@ -504,7 +501,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
           <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.04em', fontSize: '1.6rem', color: '#fff', lineHeight: 1.1 }}>
             {encoder.name}
           </Typography>
-          <Typography sx={{ fontSize: '0.8rem', color: AP.muted, mt: 0.25 }}>
+          <Typography sx={{ fontSize: { xs: '0.875rem', sm: '0.8rem' }, color: AP.muted, mt: 0.25 }}>
             {encoder.channel_name || encoder.channel_id}
           </Typography>
         </Box>
@@ -610,30 +607,12 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
 
           {/* Go Live section */}
           <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-            {broadcastState === 'offline' && (
-              <Button
-                fullWidth variant="contained" startIcon={<PlayArrowIcon />}
-                onClick={handleStartPreview} disabled={readOnly}
-                sx={{ bgcolor: AP.warn, color: '#1a1200', fontWeight: 800, py: 1.1, '&:hover': { bgcolor: '#d97706' } }}
-              >
-                Start Preview
-              </Button>
-            )}
-
-            {broadcastState === 'starting_preview' && (
-              <Button fullWidth variant="contained" disabled
-                sx={{ bgcolor: AP.warn, color: '#1a1200', fontWeight: 800, py: 1.1, opacity: 0.7 }}
-              >
-                <CircularProgress size={16} sx={{ color: '#1a1200', mr: 1 }} /> Starting preview…
-              </Button>
-            )}
-
             {(broadcastState === 'preview' || broadcastState === 'going_live') && (
               <Button
                 fullWidth variant="contained" startIcon={broadcastState === 'going_live' ? null : <FiberManualRecordIcon />}
                 onClick={handleGoLive} disabled={readOnly || broadcastState === 'going_live' || !anyDestSelected}
                 sx={{
-                  bgcolor: AP.danger, color: '#fff', fontWeight: 800, py: 1.3, fontSize: '1rem', letterSpacing: '0.04em',
+                  bgcolor: AP.danger, color: '#fff', fontWeight: 800, py: 1.3, minHeight: 48, fontSize: '1rem', letterSpacing: '0.04em',
                   '&:hover': { bgcolor: '#dc2626' }, '&.Mui-disabled': { bgcolor: 'rgba(239,68,68,0.35)', color: 'rgba(255,255,255,0.5)' },
                 }}
               >
@@ -653,8 +632,8 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
                 </Box>
                 <Button
                   fullWidth variant="contained" startIcon={<StopIcon />}
-                  onClick={handleStop} disabled={readOnly || broadcastState === 'stopping'}
-                  sx={{ bgcolor: '#7f1d1d', color: '#fecaca', fontWeight: 800, py: 1.1, '&:hover': { bgcolor: '#991b1b' } }}
+                  onClick={() => setConfirmStopOpen(true)} disabled={readOnly || broadcastState === 'stopping'}
+                  sx={{ bgcolor: '#7f1d1d', color: '#fecaca', fontWeight: 800, py: 1.1, minHeight: 48, '&:hover': { bgcolor: '#991b1b' } }}
                 >
                   {broadcastState === 'stopping' ? (<><CircularProgress size={16} sx={{ color: '#fecaca', mr: 1 }} /> Ending broadcast…</>) : 'STOP BROADCAST'}
                 </Button>
@@ -763,6 +742,30 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
       </Box>
 
       <BroadcastHistoryTable history={history} loading={historyLoading} />
+
+      <Dialog
+        open={confirmStopOpen} onClose={() => setConfirmStopOpen(false)}
+        maxWidth="xs" fullWidth
+        PaperProps={{ sx: { bgcolor: AP.paper, border: '1px solid rgba(255,255,255,0.08)' } }}
+      >
+        <DialogTitle sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem' }}>
+          Stop Broadcast?
+        </DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontSize: '0.85rem', color: AP.muted, lineHeight: 1.5 }}>
+            This will end the stream on all destinations and start clipping the broadcast.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={() => setConfirmStopOpen(false)} sx={{ color: AP.muted }}>Cancel</Button>
+          <Button
+            variant="contained" startIcon={<StopIcon />} onClick={handleStop}
+            sx={{ bgcolor: AP.danger, color: '#fff', fontWeight: 700, '&:hover': { bgcolor: '#dc2626' } }}
+          >
+            Stop Broadcast
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

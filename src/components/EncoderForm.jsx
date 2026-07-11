@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   Box, Typography, TextField, Button, CircularProgress, Alert, MenuItem,
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Switch, Checkbox,
+  useTheme, useMediaQuery,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
@@ -84,6 +85,8 @@ export default function EncoderForm({ token, tenantId, mode }) {
   const navigate = useNavigate()
   const { id } = useParams()
   const isEdit = mode === 'edit'
+  const theme = useTheme()
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'))
 
   const [form, setForm] = useState({ ...EMPTY_FORM })
   const [loading, setLoading] = useState(isEdit)
@@ -93,6 +96,10 @@ export default function EncoderForm({ token, tenantId, mode }) {
 
   const [youtubeConnected, setYoutubeConnected]   = useState(false)
   const [facebookConnected, setFacebookConnected] = useState(false)
+
+  const [channels, setChannels] = useState([])
+  const [channelsLoading, setChannelsLoading] = useState(false)
+  const [manualChannel, setManualChannel] = useState(false)
 
   const [autoCreateYoutube, setAutoCreateYoutube] = useState(false)
   const [youtubeBroadcastTitle, setYoutubeBroadcastTitle] = useState('')
@@ -126,6 +133,16 @@ export default function EncoderForm({ token, tenantId, mode }) {
       .then(r => r.ok ? r.json() : null)
       .then(data => setFacebookConnected(!!data?.connected))
       .catch(() => setFacebookConnected(false))
+  }, [token, tenantId])
+
+  useEffect(() => {
+    if (!token) return
+    setChannelsLoading(true)
+    fetch('/api/channels', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : { channels: [] })
+      .then(data => setChannels((data.channels || []).filter(c => c.stream_type === '24/7')))
+      .catch(() => setChannels([]))
+      .finally(() => setChannelsLoading(false))
   }, [token, tenantId])
 
   function handleClose() {
@@ -200,10 +217,12 @@ export default function EncoderForm({ token, tenantId, mode }) {
   }
 
   const isValid = form.name.trim() && form.channel_id.trim() && (!isEdit || confirmChange)
+  const channelKnown = channels.some(c => c.id === form.channel_id)
+  const manualChannelMode = manualChannel || (!channelsLoading && !!form.channel_id && !channelKnown)
 
   return (
-    <Dialog open onClose={handleClose} fullWidth maxWidth="sm"
-      PaperProps={{ sx: { bgcolor: '#161b2e', border: '1px solid rgba(255,255,255,0.08)' } }}
+    <Dialog open onClose={handleClose} fullWidth maxWidth="sm" fullScreen={fullScreen}
+      PaperProps={{ sx: { bgcolor: '#161b2e', border: { xs: 'none', sm: '1px solid rgba(255,255,255,0.08)' } } }}
     >
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem' }}>
         {isEdit ? 'Edit Encoder' : 'Add Encoder'}
@@ -248,6 +267,7 @@ export default function EncoderForm({ token, tenantId, mode }) {
               size="small" label="Name" required fullWidth autoFocus
               value={form.name} onChange={e => set('name', e.target.value)}
               placeholder="e.g. Newsroom Encoder 1"
+              sx={{ mt: 1.5 }}
             />
             <TextField
               size="small" label="Description" fullWidth multiline minRows={2}
@@ -255,23 +275,54 @@ export default function EncoderForm({ token, tenantId, mode }) {
               placeholder="Optional notes about this encoder's location or purpose"
             />
 
-            <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1', mt: 0.5 }}>
-              ASSIGNED 24/7 CHANNEL
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 1.5 }}>
-              <TextField
-                size="small" label="Channel ID" required fullWidth
-                value={form.channel_id} onChange={e => set('channel_id', e.target.value)}
-                placeholder="JW channel/stream ID"
-              />
-              <TextField
-                size="small" label="Channel Name" fullWidth
-                value={form.channel_name || ''} onChange={e => set('channel_name', e.target.value)}
-                placeholder="Display name"
-              />
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.5 }}>
+              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1' }}>
+                ASSIGNED 24/7 CHANNEL
+              </Typography>
+              <Button
+                size="small" onClick={() => setManualChannel(m => !m)}
+                sx={{ fontSize: '0.68rem', color: AP.accent, textTransform: 'none', p: 0, minWidth: 0 }}
+              >
+                {manualChannelMode ? 'Select from list instead' : 'Enter channel ID manually'}
+              </Button>
             </Box>
+            {manualChannelMode ? (
+              <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5 }}>
+                <TextField
+                  size="small" label="Channel ID" required fullWidth
+                  value={form.channel_id} onChange={e => set('channel_id', e.target.value)}
+                  placeholder="JW channel/stream ID"
+                />
+                <TextField
+                  size="small" label="Channel Name" fullWidth
+                  value={form.channel_name || ''} onChange={e => set('channel_name', e.target.value)}
+                  placeholder="Display name"
+                />
+              </Box>
+            ) : (
+              <TextField
+                select size="small" label="Channel" required fullWidth
+                value={channels.some(c => c.id === form.channel_id) ? form.channel_id : ''}
+                onChange={e => {
+                  const ch = channels.find(c => c.id === e.target.value)
+                  setForm(prev => ({
+                    ...prev,
+                    channel_id: e.target.value,
+                    channel_name: ch?.name || '',
+                    ingest_url: ch?.ingest_url || prev.ingest_url,
+                    stream_key: ch?.ingest_key || prev.stream_key,
+                  }))
+                }}
+                disabled={channelsLoading}
+                helperText={channelsLoading ? 'Loading 24/7 channels…' : (channels.length === 0 ? 'No 24/7 channels found — enter one manually' : undefined)}
+              >
+                {channels.map(c => (
+                  <MenuItem key={c.id} value={c.id}>{c.name || c.id} ({c.id.slice(0, 8)}…)</MenuItem>
+                ))}
+              </TextField>
+            )}
 
-            <Box sx={{ display: 'flex', gap: 1.5 }}>
+            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5 }}>
               <TextField
                 select size="small" label="Ingest Format" fullWidth
                 value={form.ingest_format} onChange={e => set('ingest_format', e.target.value)}
@@ -392,10 +443,10 @@ export default function EncoderForm({ token, tenantId, mode }) {
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 2.5 }}>
-        <Button onClick={handleClose} sx={{ color: AP.muted }}>Cancel</Button>
+        <Button onClick={handleClose} sx={{ color: AP.muted, minHeight: { xs: 44, sm: 'auto' } }}>Cancel</Button>
         <Button
           variant="contained" onClick={handleSave} disabled={!isValid || saving || loading}
-          sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}
+          sx={{ bgcolor: AP.accent, minHeight: { xs: 44, sm: 'auto' }, '&:hover': { bgcolor: AP.accentHov } }}
         >
           {saving
             ? <><CircularProgress size={16} sx={{ color: '#fff', mr: 1 }} />{creatingBroadcast ? 'Creating YouTube broadcast…' : 'Saving…'}</>

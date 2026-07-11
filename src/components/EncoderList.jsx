@@ -101,14 +101,14 @@ function EncoderCard({ encoder, readOnly, onEdit, onOpen, onDelete }) {
         <Button
           size="small" variant="contained" startIcon={<PlayArrowIcon />}
           onClick={() => onOpen(encoder)}
-          sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov }, fontSize: '0.72rem' }}
+          sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov }, fontSize: '0.72rem', minHeight: { xs: 44, sm: 'auto' }, flex: { xs: 1, sm: 'initial' } }}
         >
           Open Control
         </Button>
         <Button
           size="small" variant="outlined" startIcon={<EditIcon />}
           onClick={() => onEdit(encoder)}
-          sx={{ borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent, bgcolor: AP.accentDim }, fontSize: '0.72rem' }}
+          sx={{ borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent, bgcolor: AP.accentDim }, fontSize: '0.72rem', minHeight: { xs: 44, sm: 'auto' }, flex: { xs: 1, sm: 'initial' } }}
         >
           Edit
         </Button>
@@ -157,7 +157,7 @@ export default function EncoderList({ token, tenantId, readOnly }) {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
         <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1.1rem' }}>
           ENCODERS
         </Typography>
@@ -165,7 +165,7 @@ export default function EncoderList({ token, tenantId, readOnly }) {
           <Button
             size="small" variant="contained" startIcon={<AddIcon />}
             onClick={() => navigate('/admin/encoders/new')}
-            sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov }, fontSize: '0.75rem' }}
+            sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov }, fontSize: '0.75rem', minHeight: { xs: 44, sm: 'auto' } }}
           >
             Add Encoder
           </Button>

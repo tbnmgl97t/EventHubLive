@@ -267,7 +267,7 @@ function InfoRow({ label, value, mono }) {
   return (
     <Box>
       <Typography sx={{ fontSize: '0.58rem', fontWeight: 600, letterSpacing: '0.1em', color: 'rgba(148,163,184,0.55)', textTransform: 'uppercase', mb: 0.45 }}>{label}</Typography>
-      <Typography sx={{ fontSize: '0.83rem', color: '#e2e8f0', fontFamily: mono ? 'monospace' : 'inherit', fontWeight: 500, lineHeight: 1.4 }}>{value}</Typography>
+      <Typography sx={{ fontSize: { xs: '0.875rem', sm: '0.83rem' }, color: '#e2e8f0', fontFamily: mono ? 'monospace' : 'inherit', fontWeight: 500, lineHeight: 1.4, wordBreak: mono ? 'break-all' : 'normal' }}>{value}</Typography>
     </Box>
   )
 }
@@ -956,7 +956,7 @@ export default function StreamPage() {
         }}>
           <Tooltip title="Back to admin">
             <IconButton onClick={() => navigate('/admin')} size="small"
-              sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.06)' } }}>
+              sx={{ color: 'rgba(255,255,255,0.4)', minWidth: { xs: 40, sm: 'auto' }, minHeight: { xs: 40, sm: 'auto' }, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.06)' } }}>
               <ArrowBackIcon sx={{ fontSize: 17 }} />
             </IconButton>
           </Tooltip>
@@ -1023,7 +1023,7 @@ export default function StreamPage() {
                     '&:hover': { bgcolor: s === 'ready' ? '#3da67d' : '#059669' },
                     '&:disabled': { bgcolor: 'rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.5)' },
                     fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em',
-                    px: 1.5, py: 0.55, borderRadius: 1.5, boxShadow: 'none',
+                    px: 1.5, py: 0.55, minHeight: { xs: 40, sm: 32 }, borderRadius: 1.5, boxShadow: 'none',
                     textTransform: 'none',
                   }}
                 >
@@ -1057,7 +1057,7 @@ export default function StreamPage() {
                     '&:hover': { bgcolor: waitingForLive ? '#d97706' : '#4f46e5' },
                     '&:disabled': { bgcolor: waitingForLive ? 'rgba(245,158,11,0.55)' : 'rgba(99,102,241,0.4)', color: 'rgba(255,255,255,0.7)' },
                     fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em',
-                    px: 1.5, py: 0.55, borderRadius: 1.5, boxShadow: 'none',
+                    px: 1.5, py: 0.55, minHeight: { xs: 40, sm: 32 }, borderRadius: 1.5, boxShadow: 'none',
                     textTransform: 'none',
                   }}
                 >
@@ -1092,7 +1092,7 @@ export default function StreamPage() {
                     },
                     '&:disabled': { borderColor: 'rgba(245,158,11,0.3)', color: 'rgba(245,158,11,0.5)' },
                     fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em',
-                    px: 1.5, py: 0.55, borderRadius: 1.5, boxShadow: 'none',
+                    px: 1.5, py: 0.55, minHeight: { xs: 40, sm: 32 }, borderRadius: 1.5, boxShadow: 'none',
                     textTransform: 'none',
                   }}
                 >
@@ -1111,7 +1111,7 @@ export default function StreamPage() {
 
           <Tooltip title="Refresh">
             <IconButton onClick={() => fetchChannel(true)} size="small"
-              sx={{ color: refreshing ? '#6366f1' : 'rgba(255,255,255,0.3)', '&:hover': { color: '#fff' },
+              sx={{ color: refreshing ? '#6366f1' : 'rgba(255,255,255,0.3)', minWidth: { xs: 40, sm: 'auto' }, minHeight: { xs: 40, sm: 'auto' }, '&:hover': { color: '#fff' },
                 animation: refreshing ? 'spin 0.8s linear infinite' : 'none',
                 '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } } }}>
               <RefreshIcon sx={{ fontSize: 16 }} />
@@ -1120,7 +1120,7 @@ export default function StreamPage() {
           {!readOnly && (
             <Tooltip title="Delete stream">
               <IconButton onClick={() => setDeleteOpen(true)} size="small"
-                sx={{ color: 'rgba(248,113,113,0.4)', '&:hover': { color: '#f87171', bgcolor: 'rgba(239,68,68,0.1)' } }}>
+                sx={{ color: 'rgba(248,113,113,0.4)', minWidth: { xs: 40, sm: 'auto' }, minHeight: { xs: 40, sm: 'auto' }, '&:hover': { color: '#f87171', bgcolor: 'rgba(239,68,68,0.1)' } }}>
                 <DeleteIcon sx={{ fontSize: 16 }} />
               </IconButton>
             </Tooltip>
@@ -1299,7 +1299,7 @@ export default function StreamPage() {
                       <Countdown targetIso={channel.stream_start} compact />
                     </Box>
                   )}
-                  <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 1.5, columnGap: 4 }}>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, rowGap: 1.5, columnGap: 4 }}>
                     {channel.stream_start && <InfoRow label="Start"    value={`${fmtDateTime(channel.stream_start, TZ)} ${tzLabel}`} />}
                     {duration             && <InfoRow label="Duration" value={duration} />}
                     {channel.stream_end   && (
@@ -1313,8 +1313,10 @@ export default function StreamPage() {
 
               {/* ── Stream info ── */}
               <Box sx={{ bgcolor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 2, p: 2 }}>
-                <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 1.75, columnGap: 4 }}>
-                  <InfoRow label="Stream ID" value={channel.id} mono />
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, rowGap: 1.75, columnGap: 4 }}>
+                  <Box sx={{ gridColumn: '1 / -1' }}>
+                    <InfoRow label="Stream ID" value={channel.id} mono />
+                  </Box>
                   <InfoRow label="Type"      value={channel.stream_type === '24/7' ? '24/7 Channel' : 'Live Event'} />
                   <InfoRow label="Format"    value={fmt?.label || channel.ingest_format?.toUpperCase()} />
                   {channel.stream_type !== '24/7' && <InfoRow label="Warm-up" value="15 min" />}
@@ -1449,7 +1451,8 @@ export default function StreamPage() {
             bgcolor: '#0c1120',
             border: '1px solid rgba(239,68,68,0.2)',
             borderRadius: 2.5,
-            minWidth: 360,
+            width: { xs: 'calc(100% - 32px)', sm: 'auto' },
+            minWidth: { xs: 'auto', sm: 360 },
           },
         }}
       >
@@ -1530,7 +1533,8 @@ export default function StreamPage() {
             bgcolor: '#0c1120',
             border: '1px solid rgba(239,68,68,0.25)',
             borderRadius: 2.5,
-            minWidth: 380,
+            width: { xs: 'calc(100% - 32px)', sm: 'auto' },
+            minWidth: { xs: 'auto', sm: 380 },
           },
         }}
       >

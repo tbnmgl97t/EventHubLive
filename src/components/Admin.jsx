@@ -12,7 +12,7 @@ import {
   Drawer,
   Table, TableBody, TableCell, TableHead, TableRow,
   AppBar, Toolbar, Stack, ToggleButton, ToggleButtonGroup, MenuItem,
-  Tabs, Tab, Switch,
+  Tabs, Tab, Switch, useTheme, useMediaQuery,
 } from '@mui/material'
 import { ThemeProvider, CssBaseline, createTheme } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
@@ -41,6 +41,7 @@ import VpnKeyIcon from '@mui/icons-material/VpnKey'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import ImageIcon from '@mui/icons-material/Image'
 import RouterIcon from '@mui/icons-material/Router'
+import MenuIcon from '@mui/icons-material/Menu'
 import { useTenant } from '../contexts/TenantContext'
 import { supabase } from '../lib/supabaseClient'
 
@@ -529,9 +530,9 @@ function EventDrawer({ open, initial, onClose, onSave }) {
 
   return (
     <Drawer anchor="right" open={open} onClose={onClose}
-      PaperProps={{ sx: { width: 560, bgcolor: '#13192b', borderLeft: '2px solid rgba(99,102,241,0.5)', boxShadow: '-8px 0 40px rgba(0,0,0,0.6)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
+      PaperProps={{ sx: { width: { xs: '100%', sm: 560 }, maxWidth: '100%', bgcolor: '#13192b', borderLeft: '2px solid rgba(99,102,241,0.5)', boxShadow: '-8px 0 40px rgba(0,0,0,0.6)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
     >
-      <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <Box sx={{ p: { xs: 2, sm: 3 }, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         {/* Header */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5, flexShrink: 0 }}>
           <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem', flex: 1 }}>
@@ -722,9 +723,9 @@ function SessionDrawer({ open, initial, tournament, channels, onClose, onSaved, 
 
   return (
     <Drawer anchor="right" open={open} onClose={onClose}
-      PaperProps={{ sx: { width: 520, bgcolor: '#13192b', borderLeft: '2px solid rgba(99,102,241,0.5)', boxShadow: '-8px 0 40px rgba(0,0,0,0.6)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
+      PaperProps={{ sx: { width: { xs: '100%', sm: 520 }, maxWidth: '100%', bgcolor: '#13192b', borderLeft: '2px solid rgba(99,102,241,0.5)', boxShadow: '-8px 0 40px rgba(0,0,0,0.6)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
     >
-      <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, flex: 1, minHeight: 0 }}>
+      <Box sx={{ p: { xs: 2, sm: 3 }, display: 'flex', flexDirection: 'column', gap: 2.5, flex: 1, minHeight: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem', flex: 1 }}>
             {initial?.id ? 'Edit Session' : 'Add Session'}
@@ -1190,7 +1191,7 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview, t
 
   return (
     <Drawer anchor="right" open={open} onClose={onClose}
-      PaperProps={{ sx: { width: 440, bgcolor: '#13192b', borderLeft: `2px solid ${cfgG.border}`, boxShadow: '-8px 0 40px rgba(0,0,0,0.6)', display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
+      PaperProps={{ sx: { width: { xs: '100%', sm: 440 }, maxWidth: '100%', bgcolor: '#13192b', borderLeft: `2px solid ${cfgG.border}`, boxShadow: '-8px 0 40px rgba(0,0,0,0.6)', display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
     >
       {/* ── Header ── */}
       <Box sx={{ px: 2.5, pt: 2.5, pb: 2, background: `linear-gradient(135deg, ${cfgG.glow} 0%, rgba(19,25,43,0) 55%)`, borderBottom: '1px solid rgba(255,255,255,0.07)', flexShrink: 0 }}>
@@ -1807,9 +1808,9 @@ function CreateStreamDrawer({ open, token, tenantId, onClose, onCreated }) {
 
   return (
     <Drawer anchor="right" open={open} onClose={onClose}
-      PaperProps={{ sx: { width: 520, bgcolor: '#13192b', borderLeft: '2px solid rgba(99,102,241,0.5)', boxShadow: '-8px 0 40px rgba(0,0,0,0.6)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
+      PaperProps={{ sx: { width: { xs: '100%', sm: 520 }, maxWidth: '100%', bgcolor: '#13192b', borderLeft: '2px solid rgba(99,102,241,0.5)', boxShadow: '-8px 0 40px rgba(0,0,0,0.6)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
     >
-      <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, flex: 1, minHeight: 0 }}>
+      <Box sx={{ p: { xs: 2, sm: 3 }, display: 'flex', flexDirection: 'column', gap: 2.5, flex: 1, minHeight: 0 }}>
         {/* Header */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
           <LiveTvIcon sx={{ color: AP.accent, fontSize: 20 }} />
@@ -2558,6 +2559,7 @@ function TournamentCard({ tournament, channels, token, onRefresh, onAddDay, onEd
             </Typography>
           </Box>
         ) : (
+          <Box sx={{ overflowX: 'auto' }}>
           <Table size="small">
             <TableHead>
               <TableRow sx={{ '& th': { color: '#a8bcd4', fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.08em', borderColor: 'rgba(255,255,255,0.05)' } }}>
@@ -2625,6 +2627,7 @@ function TournamentCard({ tournament, channels, token, onRefresh, onAddDay, onEd
               })}
             </TableBody>
           </Table>
+          </Box>
         )}
       </Collapse>
     </Paper>
@@ -4265,6 +4268,7 @@ function TenantMembersPanel({ token, tenantId, canManage }) {
       ) : members.length === 0 ? (
         <Typography sx={{ fontSize: '0.8rem', color: AP.muted }}>No team members yet.</Typography>
       ) : (
+        <Box sx={{ overflowX: 'auto' }}>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -4300,6 +4304,7 @@ function TenantMembersPanel({ token, tenantId, canManage }) {
             ))}
           </TableBody>
         </Table>
+        </Box>
       )}
     </Box>
   )
@@ -4411,6 +4416,7 @@ function TenantsPanel({ token }) {
       {loading ? (
         <CircularProgress size={20} sx={{ color: AP.accent }} />
       ) : (
+        <Box sx={{ overflowX: 'auto' }}>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -4453,6 +4459,7 @@ function TenantsPanel({ token }) {
             ))}
           </TableBody>
         </Table>
+        </Box>
       )}
 
       <Dialog open={!!editTenant} onClose={() => setEditTenant(null)} maxWidth="xs" fullWidth>
@@ -4613,6 +4620,9 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
   const { tenant } = useTenant()
   const TZ         = tenant?.timezone || 'America/New_York'
   const tzLabel    = getTzLabel(TZ)
+  const theme      = useTheme()
+  const isMobile   = useMediaQuery(theme.breakpoints.down('md'))
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [tournaments, setTournaments] = useState([])
   const [channels, setChannels] = useState([])
   const [loadingTournaments, setLoadingTournaments] = useState(true)
@@ -5002,29 +5012,118 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
     return true
   }
 
+  // Shared sidebar contents (used both in the permanent desktop rail and the mobile drawer)
+  const sidebarContent = (
+    <Box sx={{ bgcolor: '#0a0f1a', display: 'flex', flexDirection: 'column', py: 2, height: '100%', overflow: 'auto' }}>
+      {isMobile && (
+        <Box sx={{ px: 2, pb: 2, display: 'flex', flexDirection: 'column', gap: 1, borderBottom: '1px solid rgba(255,255,255,0.06)', mb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <EHLLogo size={20} dark animate />
+              <Typography sx={{ color: '#e2e8f0', fontSize: '0.85rem', fontWeight: 700 }}>{tenantName || 'Admin'}</Typography>
+            </Box>
+            <IconButton onClick={() => setSidebarOpen(false)} sx={{ color: '#a8bcd4' }} size="small">
+              <CloseIcon sx={{ fontSize: 20 }} />
+            </IconButton>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+            {isSuperAdmin && (
+              <Chip label="SUPER ADMIN" size="small"
+                sx={{ height: 20, fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.35)' }} />
+            )}
+            {isReadOnly && (
+              <Chip label="READ-ONLY" size="small"
+                sx={{ height: 20, fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(148,163,184,0.12)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.3)' }} />
+            )}
+            {liveNow > 0 && (
+              <Chip label={`${liveNow} LIVE`} size="small"
+                sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700, bgcolor: AP.liveDim, color: AP.live, border: `1px solid ${AP.liveBdr}` }} />
+            )}
+          </Box>
+          {tenants && tenants.length > 1 && (
+            <TextField
+              select
+              size="small"
+              value={tenantId}
+              onChange={e => onSwitchTenant?.(e.target.value)}
+              sx={{
+                mt: 0.5,
+                '& .MuiInputBase-root': { fontSize: '0.78rem', color: '#a8bcd4', height: 40 },
+                '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.12)' },
+              }}
+            >
+              {tenants.map(t => <MenuItem key={t.id} value={t.id} sx={{ fontSize: '0.85rem' }}>{t.name}</MenuItem>)}
+            </TextField>
+          )}
+        </Box>
+      )}
+      {NAV_ITEMS.map(({ section, items }) => (
+        <Box key={section} sx={{ mb: 2 }}>
+          <Typography sx={{ px: 2, pb: 0.75, fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.1em', color: 'rgba(148,163,184,0.5)', textTransform: 'uppercase' }}>
+            {section}
+          </Typography>
+          {items.map(item => {
+            const active = isNavActive(item.tab, item.view)
+            return (
+              <Box
+                key={item.label}
+                onClick={() => { navClick(item.tab, item.view); if (isMobile) setSidebarOpen(false) }}
+                sx={{
+                  px: 2, py: { xs: 1.1, md: 0.85 }, display: 'flex', alignItems: 'center', gap: 1,
+                  cursor: 'pointer', borderRadius: '0 6px 6px 0', mr: 1,
+                  minHeight: { xs: 44, md: 'auto' },
+                  bgcolor: active ? AP.accentDim : 'transparent',
+                  borderLeft: active ? `2px solid ${AP.accent}` : '2px solid transparent',
+                  '&:hover': { bgcolor: active ? AP.accentMid : 'rgba(255,255,255,0.04)' },
+                }}
+              >
+                <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: active ? AP.accent : 'rgba(148,163,184,0.4)', flexShrink: 0 }} />
+                <Typography sx={{ fontSize: { xs: '0.85rem', md: '0.78rem' }, fontWeight: active ? 700 : 500, color: active ? '#e2e8f0' : '#94a3b8', flex: 1 }}>
+                  {item.label}
+                </Typography>
+                {item.count != null && (
+                  <Chip label={item.count} size="small" sx={{ height: 16, fontSize: '0.58rem', fontWeight: 700, bgcolor: 'rgba(255,255,255,0.07)', color: '#64748b', minWidth: 20 }} />
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+      ))}
+    </Box>
+  )
+
   return (
     <Box height="100vh" display="flex" flexDirection="column" sx={{ bgcolor: 'background.default', overflow: 'hidden' }}>
       {/* Topbar */}
-      <Box height={48} display="flex" alignItems="center" px={2} gap={1.5}
+      <Box height={48} display="flex" alignItems="center" px={{ xs: 1, sm: 2 }} gap={{ xs: 1, sm: 1.5 }}
         sx={{ borderBottom: '1px solid rgba(255,255,255,0.06)', bgcolor: '#0a0f1a', flexShrink: 0, zIndex: 10 }}
       >
+        {/* Hamburger — mobile/tablet only */}
+        <IconButton
+          onClick={() => setSidebarOpen(true)}
+          sx={{ color: '#a8bcd4', display: { xs: 'inline-flex', md: 'none' }, mr: 0.5 }}
+          size="small"
+        >
+          <MenuIcon sx={{ fontSize: 22 }} />
+        </IconButton>
+
         {/* Topbar logo */}
         <EHLLogo size={20} dark animate />
-        <Typography variant="caption" sx={{ color: '#334155', fontSize: '0.7rem' }}>Admin</Typography>
+        <Typography variant="caption" sx={{ color: '#334155', fontSize: '0.7rem', display: { xs: 'none', md: 'inline' } }}>Admin</Typography>
         {tenantName && (
-          <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem' }}>· {tenantName}</Typography>
+          <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem', display: { xs: 'none', md: 'inline' } }}>· {tenantName}</Typography>
         )}
         {isSuperAdmin && (
           <Chip label="SUPER ADMIN" size="small"
-            sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.35)' }} />
+            sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.35)', display: { xs: 'none', md: 'inline-flex' } }} />
         )}
         {isReadOnly && (
           <Chip label="READ-ONLY" size="small"
-            sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(148,163,184,0.12)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.3)' }} />
+            sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(148,163,184,0.12)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.3)', display: { xs: 'none', md: 'inline-flex' } }} />
         )}
         {liveNow > 0 && (
           <Chip label={`${liveNow} LIVE`} size="small"
-            sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: AP.liveDim, color: AP.live, border: `1px solid ${AP.liveBdr}` }} />
+            sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: AP.liveDim, color: AP.live, border: `1px solid ${AP.liveBdr}`, display: { xs: 'none', sm: 'inline-flex' } }} />
         )}
         <Box ml="auto" display="flex" gap={1} alignItems="center">
           {tenants && tenants.length > 1 && (
@@ -5034,6 +5133,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
               value={tenantId}
               onChange={e => onSwitchTenant?.(e.target.value)}
               sx={{
+                display: { xs: 'none', md: 'flex' },
                 '& .MuiInputBase-root': { fontSize: '0.72rem', color: '#a8bcd4', height: 30 },
                 '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.12)' },
                 minWidth: 140,
@@ -5052,40 +5152,25 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
 
       {/* Layout */}
       <Box display="flex" flex={1} overflow="hidden">
-        {/* Sidebar */}
-        <Box width={200} sx={{ bgcolor: '#0a0f1a', borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', py: 2, flexShrink: 0, overflow: 'auto' }}>
-          {NAV_ITEMS.map(({ section, items }) => (
-            <Box key={section} sx={{ mb: 2 }}>
-              <Typography sx={{ px: 2, pb: 0.75, fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.1em', color: 'rgba(148,163,184,0.5)', textTransform: 'uppercase' }}>
-                {section}
-              </Typography>
-              {items.map(item => {
-                const active = isNavActive(item.tab, item.view)
-                return (
-                  <Box
-                    key={item.label}
-                    onClick={() => navClick(item.tab, item.view)}
-                    sx={{
-                      px: 2, py: 0.85, display: 'flex', alignItems: 'center', gap: 1,
-                      cursor: 'pointer', borderRadius: '0 6px 6px 0', mr: 1,
-                      bgcolor: active ? AP.accentDim : 'transparent',
-                      borderLeft: active ? `2px solid ${AP.accent}` : '2px solid transparent',
-                      '&:hover': { bgcolor: active ? AP.accentMid : 'rgba(255,255,255,0.04)' },
-                    }}
-                  >
-                    <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: active ? AP.accent : 'rgba(148,163,184,0.4)', flexShrink: 0 }} />
-                    <Typography sx={{ fontSize: '0.78rem', fontWeight: active ? 700 : 500, color: active ? '#e2e8f0' : '#94a3b8', flex: 1 }}>
-                      {item.label}
-                    </Typography>
-                    {item.count != null && (
-                      <Chip label={item.count} size="small" sx={{ height: 16, fontSize: '0.58rem', fontWeight: 700, bgcolor: 'rgba(255,255,255,0.07)', color: '#64748b', minWidth: 20 }} />
-                    )}
-                  </Box>
-                )
-              })}
-            </Box>
-          ))}
+        {/* Sidebar — permanent rail on desktop, overlay drawer on mobile/tablet */}
+        <Box
+          sx={{
+            display: { xs: 'none', md: 'block' },
+            width: 200, flexShrink: 0,
+            borderRight: '1px solid rgba(255,255,255,0.06)',
+          }}
+        >
+          {sidebarContent}
         </Box>
+        <Drawer
+          anchor="left"
+          open={isMobile && sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          ModalProps={{ keepMounted: true }}
+          sx={{ display: { xs: 'block', md: 'none' }, '& .MuiDrawer-paper': { width: 260, boxSizing: 'border-box' } }}
+        >
+          {sidebarContent}
+        </Drawer>
 
         {/* Main content */}
         <Box flex={1} overflow="auto">
@@ -5094,7 +5179,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
           {activeTab === 'dashboard' && (
             <>
               {/* Stats row */}
-              <Box display="grid" sx={{ gridTemplateColumns: 'repeat(4,1fr)', gap: 1.5, p: 2, pb: 0 }}>
+              <Box display="grid" sx={{ gridTemplateColumns: { xs: 'repeat(2,1fr)', md: 'repeat(4,1fr)' }, gap: { xs: 1, sm: 1.5 }, p: { xs: 1, sm: 2 }, pb: 0 }}>
                 {[
                   { label: 'Live Now',       value: liveNow,        color: AP.live,    dim: AP.liveDim   },
                   { label: 'Sessions Today', value: sessionsToday,  color: AP.accent,  dim: AP.accentDim },
@@ -5113,7 +5198,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
               </Box>
 
               {/* Single-panel content area — switches based on nav selection */}
-              <Box sx={{ p: 2 }}>
+              <Box sx={{ p: { xs: 1, sm: 2 } }}>
 
                 {/* Events panel */}
                 {dashboardView === 'events' && <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
@@ -5179,7 +5264,8 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                 {/* Streams panel */}
                 {dashboardView === 'streams' && <Box>
                   <Box sx={{
-                    px: 1, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    px: 1, py: 1.5, display: 'flex', flexDirection: { xs: 'column', sm: 'row' },
+                    alignItems: { xs: 'stretch', sm: 'center' }, justifyContent: 'space-between', gap: { xs: 1.25, sm: 0 },
                   }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
                       <Typography sx={{ fontFamily: "'Bayon', sans-serif", letterSpacing: '0.06em', fontSize: '1rem' }}>
@@ -5232,7 +5318,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                         </Box>
                       )}
                     </Box>
-                    <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: { xs: 'space-between', sm: 'flex-end' }, gap: 1 }}>
                       <Tooltip title="Refresh channels">
                         <IconButton size="small" onClick={fetchChannels} sx={{ color: '#a8bcd4' }}>
                           <RefreshIcon sx={{ fontSize: 18 }} />
@@ -5244,7 +5330,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                           startIcon={<LiveTvIcon sx={{ fontSize: '14px !important' }} />}
                           variant="outlined"
                           onClick={() => { setCreateStreamKey(k => k + 1); setCreateStreamOpen(true) }}
-                          sx={{ fontSize: '0.72rem', borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent } }}
+                          sx={{ fontSize: '0.72rem', borderColor: AP.accentBdr, color: AP.accent, whiteSpace: 'nowrap', minHeight: { xs: 44, sm: 'auto' }, flex: { xs: 1, sm: 'initial' }, '&:hover': { borderColor: AP.accent } }}
                         >
                           New Live Stream
                         </Button>
@@ -5262,9 +5348,9 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                 </Box>
               ) : (
                 <>
-                {/* ── Column header bar ── */}
+                {/* ── Column header bar — hidden on mobile, rows read as cards there ── */}
                 <Box sx={{
-                  display: 'grid',
+                  display: { xs: 'none', sm: 'grid' },
                   gridTemplateColumns: '1fr 110px 100px 160px',
                   px: 1, py: 0.75,
                   borderBottom: '1px solid rgba(255,255,255,0.04)',
@@ -5497,9 +5583,15 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                             onClick={() => navigate(`/admin/stream/${ch.id}`, { state: { channel: ch } })}
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: '1fr 110px 100px 160px',
+                              gridTemplateColumns: { xs: '1fr auto', sm: '1fr 110px 100px 160px' },
+                              gridTemplateAreas: {
+                                xs: '"title title" "status dest" "sched sched"',
+                                sm: '"title status dest sched"',
+                              },
+                              rowGap: { xs: 0.75, sm: 0 },
                               alignItems: 'center',
-                              px: 1, py: 1.25,
+                              px: 1, py: { xs: 1.5, sm: 1.25 },
+                              minHeight: { xs: 44, sm: 'auto' },
                               cursor: 'pointer',
                               borderBottom: '1px solid rgba(255,255,255,0.04)',
                               transition: 'background 0.12s',
@@ -5508,7 +5600,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                             }}
                           >
                             {/* ── Title cell ── */}
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+                            <Box sx={{ gridArea: 'title', display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
                               {/* Thumbnail */}
                               <Box sx={{
                                 width: 44, height: 34, borderRadius: 1.5, flexShrink: 0,
@@ -5529,9 +5621,9 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                               </Box>
 
                               {/* Name + meta */}
-                              <Box sx={{ minWidth: 0 }}>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                                  <Typography sx={{ fontWeight: 600, fontSize: '0.85rem', color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 340 }}>
+                              <Box sx={{ minWidth: 0, flex: 1 }}>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+                                  <Typography sx={{ fontWeight: 600, fontSize: '0.85rem', color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: { xs: '100%', sm: 340 } }}>
                                     {ch.name}
                                   </Typography>
                                   {ch.enable_live_to_vod && (
@@ -5547,7 +5639,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                             </Box>
 
                             {/* ── Status cell ── */}
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                            <Box sx={{ gridArea: 'status', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                               {!spinupStatus && (
                                 <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, px: '7px', height: 20, borderRadius: '5px', fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.04em', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, lineHeight: 1, width: 'fit-content' }}>
                                   {isLiveNow && <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: cfg.color, flexShrink: 0 }} />}
@@ -5559,7 +5651,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                             </Box>
 
                             {/* ── Destinations cell ── */}
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                            <Box sx={{ gridArea: 'dest', display: 'flex', alignItems: 'center', gap: 0.75 }}>
                               {ch.youtube_broadcast_id && (
                                 <Tooltip title="YouTube">
                                   <Box component="img" src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg" sx={{ width: 18, height: 18, opacity: 0.85, flexShrink: 0 }} />
@@ -5580,7 +5672,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                             </Box>
 
                             {/* ── Schedule cell ── */}
-                            {scheduleCell}
+                            <Box sx={{ gridArea: 'sched' }}>{scheduleCell}</Box>
                           </Box>
                         )
                       })
@@ -5594,7 +5686,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
           )}
 
           {activeTab === 'encoders' && (
-            <Box sx={{ p: 2 }}>
+            <Box sx={{ p: { xs: 1, sm: 2 } }}>
               <Routes>
                 <Route index element={<EncoderList token={token} tenantId={tenantId} readOnly={isReadOnly} />} />
                 <Route path="new" element={<EncoderForm mode="create" token={token} tenantId={tenantId} />} />
@@ -5605,7 +5697,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
           )}
 
           {activeTab === 'costs' && isSuperAdmin && (
-            <Box sx={{ p: 2, pb: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <Box sx={{ p: { xs: 1, sm: 2 }, pb: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
               <CostsPage
                 tournaments={tournaments}
                 channels={channels}
@@ -5618,7 +5710,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
           )}
 
           {activeTab === 'settings' && !isReadOnly && (
-            <Box sx={{ p: 2, pb: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <Box sx={{ p: { xs: 1, sm: 2 }, pb: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
 
               {/* ── Team: who has access to this organization ── */}
               <TenantMembersPanel token={token} tenantId={tenantId} canManage={tenantRole === 'admin' || isSuperAdmin} />
@@ -5644,13 +5736,13 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
           )}
 
           {activeTab === 'tenants' && isSuperAdmin && (
-            <Box sx={{ p: 2 }}>
+            <Box sx={{ p: { xs: 1, sm: 2 } }}>
               <TenantsPanel token={token} />
             </Box>
           )}
 
           {activeTab === 'superadmins' && isSuperAdmin && (
-            <Box sx={{ p: 2 }}>
+            <Box sx={{ p: { xs: 1, sm: 2 } }}>
               <SuperAdminsPanel token={token} />
             </Box>
           )}
@@ -5851,3 +5943,4 @@ export default function Admin() {
     </ThemeProvider>
   )
 }
+
