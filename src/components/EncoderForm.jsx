@@ -49,6 +49,7 @@ const EMPTY_FORM = {
   ingest_url: '', stream_key: '',
   simulcast_website: true, simulcast_youtube: false, simulcast_facebook: false, simulcast_app: false,
   vod_recording: true, youtube_broadcast_id: '',
+  youtube_ingest_url: '', youtube_stream_key: '',
 }
 
 function ToggleRow({ label, hint, checked, onChange, color = AP.accent, disabled }) {
@@ -93,6 +94,10 @@ export default function EncoderForm({ token, tenantId, mode }) {
   const [youtubeConnected, setYoutubeConnected]   = useState(false)
   const [facebookConnected, setFacebookConnected] = useState(false)
 
+  const [autoCreateYoutube, setAutoCreateYoutube] = useState(false)
+  const [youtubeBroadcastTitle, setYoutubeBroadcastTitle] = useState('')
+  const [creatingBroadcast, setCreatingBroadcast] = useState(false)
+
   const set = (key, value) => setForm(prev => ({ ...prev, [key]: value }))
 
   const fetchEncoder = useCallback(() => {
@@ -134,6 +139,33 @@ export default function EncoderForm({ token, tenantId, mode }) {
     setSaving(true)
     setError('')
     try {
+      let ytBroadcastId  = form.youtube_broadcast_id?.trim() || null
+      let ytIngestUrl    = form.youtube_ingest_url || null
+      let ytStreamKey    = form.youtube_stream_key || null
+
+      if (form.simulcast_youtube && youtubeConnected && autoCreateYoutube && !ytBroadcastId) {
+        setCreatingBroadcast(true)
+        try {
+          const ytRes = await fetch('/api/youtube-create-broadcast', {
+            method: 'POST',
+            headers: authHeader(token, tenantId),
+            body: JSON.stringify({
+              title: youtubeBroadcastTitle.trim() || form.name.trim(),
+              description: form.description?.trim() || '',
+              channel_id: form.channel_id.trim(),
+            }),
+          })
+          const ytData = await ytRes.json()
+          if (!ytRes.ok) throw new Error(ytData.error || 'Failed to create YouTube broadcast')
+          ytBroadcastId = ytData.broadcast_id
+          ytIngestUrl   = ytData.ingest_url
+          ytStreamKey   = ytData.stream_key
+          setForm(prev => ({ ...prev, youtube_broadcast_id: ytBroadcastId, youtube_ingest_url: ytIngestUrl, youtube_stream_key: ytStreamKey }))
+        } finally {
+          setCreatingBroadcast(false)
+        }
+      }
+
       const body = {
         name: form.name.trim(),
         description: form.description?.trim() || null,
@@ -148,7 +180,9 @@ export default function EncoderForm({ token, tenantId, mode }) {
         simulcast_facebook: form.simulcast_facebook && facebookConnected,
         simulcast_app: form.simulcast_app,
         vod_recording: form.vod_recording,
-        youtube_broadcast_id: form.youtube_broadcast_id?.trim() || null,
+        youtube_broadcast_id: ytBroadcastId,
+        youtube_ingest_url: ytIngestUrl,
+        youtube_stream_key: ytStreamKey,
       }
       const res = await fetch('/api/encoders', {
         method: isEdit ? 'PATCH' : 'POST',
@@ -256,14 +290,27 @@ export default function EncoderForm({ token, tenantId, mode }) {
               HARDWARE ENCODER CONFIG
             </Typography>
             <TextField
-              size="small" label="Ingest URL" fullWidth
+              size="small" label="JW Ingest URL" fullWidth
               value={form.ingest_url || ''} onChange={e => set('ingest_url', e.target.value)}
               placeholder="The URL your operator enters into the hardware encoder"
             />
             <TextField
-              size="small" label="Stream Key" fullWidth
+              size="small" label="JW Stream Key" fullWidth
               value={form.stream_key || ''} onChange={e => set('stream_key', e.target.value)}
             />
+            {(form.youtube_ingest_url || form.youtube_stream_key) && (
+              <>
+                <TextField
+                  size="small" label="YouTube Ingest URL" fullWidth disabled
+                  value={form.youtube_ingest_url || ''}
+                  helperText="Enter this as a second output on your hardware encoder to simulcast to YouTube"
+                />
+                <TextField
+                  size="small" label="YouTube Stream Key" fullWidth disabled
+                  value={form.youtube_stream_key || ''}
+                />
+              </>
+            )}
 
             <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1', mt: 0.5 }}>
               SIMULCAST DESTINATIONS
@@ -277,13 +324,54 @@ export default function EncoderForm({ token, tenantId, mode }) {
               color="#ff0000"
               disabled={!youtubeConnected}
             />
-            {form.simulcast_youtube && youtubeConnected && (
+            {form.simulcast_youtube && youtubeConnected && !form.youtube_broadcast_id && (
+              <ToggleRow
+                label="Auto-create YouTube Broadcast"
+                hint="Creates a persistent, always-on YouTube Live broadcast (starts private/unlisted) and binds an ingest stream to it"
+                checked={autoCreateYoutube}
+                onChange={setAutoCreateYoutube}
+                color="#ff0000"
+              />
+            )}
+            {form.simulcast_youtube && youtubeConnected && !form.youtube_broadcast_id && autoCreateYoutube && (
+              <TextField
+                size="small" label="YouTube Broadcast Title" fullWidth
+                value={youtubeBroadcastTitle} onChange={e => setYoutubeBroadcastTitle(e.target.value)}
+                placeholder={form.name.trim() || 'Defaults to encoder name'}
+                helperText="The broadcast is created and bound when you save."
+              />
+            )}
+            {form.simulcast_youtube && youtubeConnected && !form.youtube_broadcast_id && !autoCreateYoutube && (
               <TextField
                 size="small" label="YouTube Broadcast ID" fullWidth
                 value={form.youtube_broadcast_id || ''} onChange={e => set('youtube_broadcast_id', e.target.value)}
                 placeholder="Persistent liveBroadcast ID bound to this encoder's channel"
-                helperText="Required to go live on YouTube — find it in YouTube Studio for the always-on broadcast tied to this channel."
+                helperText="Or auto-create above, or paste an existing persistent broadcast ID from YouTube Studio."
               />
+            )}
+            {form.youtube_broadcast_id && (
+              <Box sx={{
+                display: 'flex', flexDirection: 'column', gap: 0.5,
+                border: '1px solid rgba(255,0,0,0.3)', borderRadius: 1.5, bgcolor: 'rgba(255,0,0,0.08)', p: 1.5,
+              }}>
+                <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#fff' }}>YouTube Broadcast</Typography>
+                <Typography
+                  component="a" href={`https://www.youtube.com/watch?v=${form.youtube_broadcast_id}`}
+                  target="_blank" rel="noreferrer"
+                  sx={{ fontSize: '0.78rem', color: '#ff6b6b', wordBreak: 'break-all' }}
+                >
+                  https://www.youtube.com/watch?v={form.youtube_broadcast_id}
+                </Typography>
+                <Typography sx={{ fontSize: '0.7rem', color: AP.muted, lineHeight: 1.4 }}>
+                  Starts Unlisted. Automatically switches to Public while this encoder is broadcasting on YouTube, and back to Unlisted when stopped.
+                </Typography>
+                <TextField
+                  size="small" label="YouTube Broadcast ID" fullWidth
+                  value={form.youtube_broadcast_id || ''} onChange={e => set('youtube_broadcast_id', e.target.value)}
+                  helperText="Manually override to link a different existing broadcast."
+                  sx={{ mt: 0.5 }}
+                />
+              </Box>
             )}
             <ToggleRow
               label="Facebook"
@@ -309,7 +397,9 @@ export default function EncoderForm({ token, tenantId, mode }) {
           variant="contained" onClick={handleSave} disabled={!isValid || saving || loading}
           sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}
         >
-          {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : 'Save'}
+          {saving
+            ? <><CircularProgress size={16} sx={{ color: '#fff', mr: 1 }} />{creatingBroadcast ? 'Creating YouTube broadcast…' : 'Saving…'}</>
+            : 'Save'}
         </Button>
       </DialogActions>
     </Dialog>

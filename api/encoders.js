@@ -6,7 +6,7 @@ const WRITABLE_FIELDS = [
   'name', 'description', 'channel_id', 'channel_name', 'ingest_format', 'region',
   'ingest_point_id', 'ingest_url', 'stream_key',
   'simulcast_youtube', 'simulcast_facebook', 'simulcast_website', 'simulcast_app',
-  'vod_recording', 'youtube_broadcast_id',
+  'vod_recording', 'youtube_broadcast_id', 'youtube_ingest_url', 'youtube_stream_key',
 ]
 
 function pickWritable(body) {

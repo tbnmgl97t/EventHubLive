@@ -324,6 +324,8 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
   const [goLiveError, setGoLiveError]     = useState('')
   const [goLiveResults, setGoLiveResults] = useState(null)
 
+  const [youtubePrivacyStatus, setYoutubePrivacyStatus] = useState(null)
+
   const elapsed = useElapsedSeconds(liveStartedAt, broadcastState === 'live')
 
   const fetchEncoder = useCallback(() => {
@@ -367,6 +369,14 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
 
   useEffect(() => { fetchHistory() }, [fetchHistory])
 
+  useEffect(() => {
+    if (!token || !encoder?.youtube_broadcast_id) return
+    fetch(`/api/youtube-broadcast-status?broadcast_id=${encodeURIComponent(encoder.youtube_broadcast_id)}`, { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.privacyStatus) setYoutubePrivacyStatus(data.privacyStatus) })
+      .catch(() => {})
+  }, [token, tenantId, encoder?.youtube_broadcast_id])
+
   // Seed destination defaults from the encoder's configured simulcast targets, once loaded.
   useEffect(() => {
     if (!encoder) return
@@ -404,6 +414,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
       if (!res.ok) throw new Error(data.error || 'Failed to go live')
 
       setGoLiveResults(data.results || null)
+      if (data.results?.youtube?.success) setYoutubePrivacyStatus('public')
       setLiveStartedAt(Date.now())
       setBroadcastState('live')
     } catch (err) {
@@ -434,6 +445,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to stop broadcast')
+      if (data.results?.youtube?.success) setYoutubePrivacyStatus('unlisted')
     } catch (err) {
       setGoLiveError(err.message)
     }
@@ -716,6 +728,34 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
                   <Chip label={encoder.region} size="small"
                     sx={{ height: 22, fontSize: '0.68rem', fontWeight: 700, bgcolor: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }} />
                 </Box>
+
+                {encoder.youtube_broadcast_id && encoder.simulcast_youtube && (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.35, pt: 0.75, mt: 0.5, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase' }}>
+                      YouTube Broadcast
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                      <Typography
+                        component="a" href={`https://www.youtube.com/watch?v=${encoder.youtube_broadcast_id}`}
+                        target="_blank" rel="noreferrer"
+                        sx={{ fontSize: '0.78rem', color: '#ff6b6b', wordBreak: 'break-all' }}
+                      >
+                        Watch on YouTube
+                      </Typography>
+                      <Chip
+                        label={youtubePrivacyStatus === 'public' ? 'Public' : youtubePrivacyStatus === 'private' ? 'Private' : 'Unlisted'}
+                        size="small"
+                        sx={{
+                          height: 20, fontSize: '0.65rem', fontWeight: 700,
+                          bgcolor: youtubePrivacyStatus === 'public' ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.06)',
+                          color: youtubePrivacyStatus === 'public' ? AP.danger : AP.muted,
+                        }}
+                      />
+                    </Box>
+                    {encoder.youtube_ingest_url && <CopyRow label="YouTube Ingest URL" value={encoder.youtube_ingest_url} />}
+                    {encoder.youtube_stream_key && <CopyRow label="YouTube Stream Key" value={encoder.youtube_stream_key} mask />}
+                  </Box>
+                )}
               </Box>
             </Collapse>
           </Box>
