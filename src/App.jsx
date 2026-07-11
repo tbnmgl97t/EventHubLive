@@ -19,7 +19,7 @@ function AppContent() {
         <Route path="/admin"            element={<Admin />} />
         <Route path="/admin/streams"   element={<Admin />} />
         <Route path="/admin/events"    element={<Admin />} />
-        <Route path="/admin/encoders"  element={<Admin />} />
+        <Route path="/admin/encoders/*" element={<Admin />} />
         <Route path="/admin/costs"     element={<Admin />} />
         <Route path="/admin/settings"  element={<Admin />} />
         <Route path="/admin/tenants"     element={<Admin />} />

@@ -238,3 +238,45 @@ create index if not exists vod_media_tenant_idx on vod_media (tenant_id);
 alter table tenants add column if not exists brightspot_cms_url    text;
 alter table tenants add column if not exists brightspot_site_url  text;
 alter table tenants add column if not exists brightspot_api_key    text;
+
+-- ── Encoder Control productionization, Phase 1 ──────────────────────────────
+-- See supabase/migrations/20260710_encoders.sql for the full rationale
+-- (tenant_id is text to match tenants(id); no RLS, same as every other table
+-- here — tenant isolation is enforced in code by resolveTenantSession()).
+create table if not exists encoders (
+  id                  uuid primary key default gen_random_uuid(),
+  tenant_id           text not null references tenants(id) on delete cascade,
+  name                text not null,
+  description         text,
+  channel_id          text not null,
+  channel_name        text,
+  ingest_format       text not null default 'rtmp',
+  region              text not null default 'us-east-1',
+  ingest_point_id     text,
+  ingest_url          text,
+  stream_key          text,
+  simulcast_youtube   boolean not null default false,
+  simulcast_facebook  boolean not null default false,
+  simulcast_website   boolean not null default true,
+  simulcast_app       boolean not null default false,
+  vod_recording       boolean not null default true,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now()
+);
+create index if not exists encoders_tenant_idx on encoders (tenant_id);
+
+create table if not exists broadcast_history (
+  id              uuid primary key default gen_random_uuid(),
+  encoder_id      uuid not null references encoders(id) on delete cascade,
+  tenant_id       text not null references tenants(id) on delete cascade,
+  title           text,
+  started_at      timestamptz,
+  ended_at        timestamptz,
+  destinations    jsonb not null default '[]',
+  jw_clip_id      text,
+  clip_title      text,
+  clip_metadata   jsonb not null default '{}',
+  created_at      timestamptz not null default now()
+);
+create index if not exists broadcast_history_encoder_idx on broadcast_history (encoder_id);
+create index if not exists broadcast_history_tenant_idx  on broadcast_history (tenant_id);

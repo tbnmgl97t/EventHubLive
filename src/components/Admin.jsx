@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Routes, Route } from 'react-router-dom'
 import EHLLogo from './EHLLogo'
 import EncoderControl from './EncoderControl'
+import EncoderList from './EncoderList'
+import EncoderForm from './EncoderForm'
 import { CdnRecordsPanel, PricingPanel } from './CostsExtras'
 import {
   Box, Paper, Typography, TextField, Button, CircularProgress,
@@ -548,8 +550,8 @@ function EventDrawer({ open, initial, onClose, onSave }) {
           <Box>
             <Typography sx={sectionLabel}>EVENT DETAILS</Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-              <TextField label="Event Name" value={form.name} onChange={setField('name')} size="small" fullWidth autoFocus placeholder="e.g. Key West Classic" />
-              <TextField label="Location"   value={form.location} onChange={setField('location')} size="small" fullWidth placeholder="e.g. Key West, FL" />
+              <TextField label="Event Name" value={form.name} onChange={setField('name')} size="small" fullWidth autoFocus placeholder="e.g. Summer Championship" />
+              <TextField label="Location"   value={form.location} onChange={setField('location')} size="small" fullWidth placeholder="e.g. Miami, FL" />
             </Box>
           </Box>
 
@@ -1892,7 +1894,7 @@ function CreateStreamDrawer({ open, token, tenantId, onClose, onCreated }) {
               <TextField
                 fullWidth size="small" label="Stream Name" autoFocus
                 value={title} onChange={e => setTitle(e.target.value)}
-                placeholder="e.g. RI Breakers — Day 1 Camera 1"
+                placeholder="e.g. Main Court — Day 1 Camera 1"
               />
 
               {/* ── Region + Ingest Format ─────────────────────── */}
@@ -3578,7 +3580,7 @@ function IngestPointsPanel({ token, tenantId }) {
   const [deletingId,   setDeletingId]   = useState(null)
   const [formError,    setFormError]    = useState('')
 
-  useEffect(() => { fetchPoints() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchPoints() }, [tenantId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function fetchPoints() {
     setLoading(true)
@@ -3962,6 +3964,82 @@ function CdnReadOnlyPanel({ records = [], channels = [], pricing, tournaments = 
   )
 }
 
+// ─── JW Player config (per-tenant) ────────────────────────────────────────────
+
+function JwPlayerSettingsPanel({ token, tenantId }) {
+  const [jwSiteId, setJwSiteId]       = useState('')
+  const [jwApiSecret, setJwApiSecret] = useState('')
+  const [configured, setConfigured]   = useState(false)
+  const [loading, setLoading]         = useState(true)
+  const [saving, setSaving]           = useState(false)
+  const [saved, setSaved]             = useState(false)
+  const [error, setError]             = useState('')
+
+  const fetchConfig = useCallback(() => {
+    setLoading(true)
+    fetch('/api/tenant', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        setJwSiteId(data?.jw_site_id || '')
+        setJwApiSecret(data?.jw_api_secret || '')
+        setConfigured(!!data?.jw_site_id)
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [token, tenantId])
+
+  useEffect(() => { fetchConfig() }, [fetchConfig])
+
+  async function handleSave(e) {
+    e.preventDefault()
+    setSaving(true); setError(''); setSaved(false)
+    try {
+      const body = { jw_site_id: jwSiteId.trim() || null, jw_api_secret: jwApiSecret.trim() || null }
+      const res = await fetch('/api/tenant', {
+        method: 'PUT',
+        headers: authHeader(token, tenantId),
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to save')
+      setConfigured(!!data.jw_site_id)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+        <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>JW Player</Typography>
+        <Chip label={configured ? 'Configured' : 'Not configured'} size="small"
+          sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700,
+            bgcolor: configured ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)',
+            color: configured ? '#10b981' : '#f59e0b' }} />
+      </Box>
+
+      {loading ? (
+        <CircularProgress size={20} sx={{ color: AP.accent }} />
+      ) : (
+        <Box component="form" onSubmit={handleSave} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxWidth: 480 }}>
+          {error && <Alert severity="error" sx={{ fontSize: '0.78rem' }}>{error}</Alert>}
+          <TextField size="small" label="JW Site ID" fullWidth value={jwSiteId} onChange={e => setJwSiteId(e.target.value)} />
+          <TextField size="small" label="JW API Secret" fullWidth
+            value={jwApiSecret} onChange={e => setJwApiSecret(e.target.value)} />
+          <Button type="submit" variant="contained" disabled={saving} size="small"
+            sx={{ alignSelf: 'flex-start', bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
+            {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : saved ? 'Saved' : 'Save'}
+          </Button>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
 // ─── BrightSpot CMS integration ───────────────────────────────────────────────
 // Defaults point at Griffin's UAT BrightSpot instance (the environment this
 // integration was built/spiked against) so the fields aren't blank on first load.
@@ -4089,7 +4167,6 @@ function BrightSpotSettingsPanel({ token, tenantId }) {
     </Box>
   )
 }
-
 
 // ─── Team management (per-tenant Admin/Read-only members) ────────────────────
 
@@ -4235,11 +4312,18 @@ function TenantsPanel({ token }) {
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState('')
   const [showForm, setShowForm]       = useState(false)
-  const [form, setForm] = useState({ name: '', slug: '', timezone: 'America/New_York', jwSiteId: '', jwApiSecret: '' })
+  const [form, setForm] = useState({ name: '', slug: '', timezone: 'America/New_York' })
   const [saving, setSaving] = useState(false)
-  const [editTenant, setEditTenant] = useState(null) // { id, name, timezone, jwSiteId, jwApiSecret } | null
+  const [editTenant, setEditTenant] = useState(null) // { id, name, timezone } | null
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError]   = useState('')
+  const [copiedId, setCopiedId]     = useState('')
+
+  function copyId(id) {
+    navigator.clipboard.writeText(id)
+    setCopiedId(id)
+    setTimeout(() => setCopiedId(''), 1500)
+  }
 
   const fetchTenants = useCallback(() => {
     setLoading(true)
@@ -4263,7 +4347,7 @@ function TenantsPanel({ token }) {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to create tenant')
-      setForm({ name: '', slug: '', timezone: 'America/New_York', jwSiteId: '', jwApiSecret: '' })
+      setForm({ name: '', slug: '', timezone: 'America/New_York' })
       setShowForm(false)
       fetchTenants()
     } catch (err) {
@@ -4275,15 +4359,14 @@ function TenantsPanel({ token }) {
 
   function openEdit(t) {
     setEditError('')
-    setEditTenant({ id: t.id, name: t.name, timezone: t.timezone || 'America/New_York', jwSiteId: t.jwSiteId || '', jwApiSecret: '' })
+    setEditTenant({ id: t.id, name: t.name, timezone: t.timezone || 'America/New_York' })
   }
 
   async function handleEditSave(e) {
     e.preventDefault()
     setEditSaving(true); setEditError('')
     try {
-      const body = { id: editTenant.id, name: editTenant.name, timezone: editTenant.timezone, jwSiteId: editTenant.jwSiteId }
-      if (editTenant.jwApiSecret.trim()) body.jwApiSecret = editTenant.jwApiSecret.trim()
+      const body = { id: editTenant.id, name: editTenant.name, timezone: editTenant.timezone }
       const res = await fetch('/api/tenants', {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -4301,7 +4384,7 @@ function TenantsPanel({ token }) {
   }
 
   return (
-    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5, maxWidth: 720 }}>
+    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5, maxWidth: 860 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
         <Typography sx={{ fontWeight: 700, fontSize: '1rem', color: '#fff' }}>Tenants</Typography>
         <Button size="small" startIcon={<AddIcon />} onClick={() => setShowForm(v => !v)} sx={{ fontSize: '0.72rem', color: AP.accent }}>
@@ -4313,14 +4396,10 @@ function TenantsPanel({ token }) {
         <Box component="form" onSubmit={handleCreate} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 2, p: 2, border: `1px solid ${AP.accentBdr}`, borderRadius: 1.5, bgcolor: AP.accentDim }}>
           <Box sx={{ display: 'flex', gap: 1.5 }}>
             <TextField size="small" label="Name" required fullWidth value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-            <TextField size="small" label="Slug" required fullWidth value={form.slug} onChange={e => setForm({ ...form, slug: e.target.value })} placeholder="e.g. acme-sports" />
-          </Box>
-          <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <TextField size="small" label="JW Site ID" fullWidth value={form.jwSiteId} onChange={e => setForm({ ...form, jwSiteId: e.target.value })} />
-            <TextField size="small" label="JW API Secret" fullWidth type="password" value={form.jwApiSecret} onChange={e => setForm({ ...form, jwApiSecret: e.target.value })} />
+            <TextField size="small" label="Slug (optional)" fullWidth value={form.slug} onChange={e => setForm({ ...form, slug: e.target.value })} placeholder="e.g. acme-sports" />
           </Box>
           <Typography sx={{ fontSize: '0.68rem', color: AP.muted }}>
-            JW credentials can be left blank and added later — the tenant just won't be able to manage streams until then.
+            JW Player credentials are configured later, from the tenant's own Settings page.
           </Typography>
           <Button type="submit" variant="contained" disabled={saving} sx={{ alignSelf: 'flex-start', bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
             {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : 'Create Tenant'}
@@ -4336,6 +4415,7 @@ function TenantsPanel({ token }) {
           <TableHead>
             <TableRow>
               <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }}>NAME</TableCell>
+              <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }}>ID</TableCell>
               <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }}>SLUG</TableCell>
               <TableCell sx={{ color: AP.muted, fontSize: '0.68rem' }}>JW PLAYER</TableCell>
               <TableCell />
@@ -4345,7 +4425,19 @@ function TenantsPanel({ token }) {
             {tenantsList.map(t => (
               <TableRow key={t.id}>
                 <TableCell sx={{ fontSize: '0.8rem', color: '#e2e8f0' }}>{t.name}</TableCell>
-                <TableCell sx={{ fontSize: '0.8rem', color: '#94a3b8' }}>{t.slug}</TableCell>
+                <TableCell>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Typography component="span" sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#94a3b8' }}>
+                      {t.id}
+                    </Typography>
+                    <Tooltip title={copiedId === t.id ? 'Copied!' : 'Copy'}>
+                      <IconButton size="small" onClick={() => copyId(t.id)} sx={{ color: copiedId === t.id ? AP.live : AP.muted, p: 0.25 }}>
+                        {copiedId === t.id ? <CheckCircleIcon sx={{ fontSize: 13 }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                </TableCell>
+                <TableCell sx={{ fontSize: '0.8rem', color: '#94a3b8' }}>{t.slug || '—'}</TableCell>
                 <TableCell>
                   <Chip label={t.jwConfigured ? 'Configured' : 'Not configured'} size="small"
                     sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700,
@@ -4373,14 +4465,8 @@ function TenantsPanel({ token }) {
                 onChange={e => setEditTenant({ ...editTenant, name: e.target.value })} />
               <TextField size="small" label="Timezone" fullWidth value={editTenant.timezone}
                 onChange={e => setEditTenant({ ...editTenant, timezone: e.target.value })} />
-              <TextField size="small" label="JW Site ID" fullWidth value={editTenant.jwSiteId}
-                onChange={e => setEditTenant({ ...editTenant, jwSiteId: e.target.value })} />
-              <TextField size="small" label="JW API Secret" fullWidth type="password"
-                placeholder="Leave blank to keep unchanged"
-                value={editTenant.jwApiSecret}
-                onChange={e => setEditTenant({ ...editTenant, jwApiSecret: e.target.value })} />
               <Typography sx={{ fontSize: '0.68rem', color: AP.muted }}>
-                The current secret is never shown here — leave it blank to keep the existing one.
+                JW Player credentials are managed from the tenant's own Settings page, not here.
               </Typography>
             </>
           )}
@@ -4545,7 +4631,8 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
   const [createStreamOpen, setCreateStreamOpen] = useState(false)
   const [createStreamKey, setCreateStreamKey]   = useState(0)
   const [selectedChannel, setSelectedChannel]   = useState(null)
-  const { activeTab, dashboardView } = PATH_MAP[location.pathname] || { activeTab: 'dashboard', dashboardView: 'streams' }
+  const { activeTab, dashboardView } = PATH_MAP[location.pathname]
+    || (location.pathname.startsWith('/admin/encoders') ? { activeTab: 'encoders', dashboardView: 'streams' } : { activeTab: 'dashboard', dashboardView: 'streams' })
   const [streamFilter,     setStreamFilter]     = useState('all')
   const [streamTypeFilter, setStreamTypeFilter] = useState('all')
   const [previewDialog, setPreviewDialog] = useState({ open: false, channelName: '', streamUrl: '' })
@@ -4566,7 +4653,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
     } finally {
       setLoadingTournaments(false)
     }
-  }, [])
+  }, [tenantId])
 
   const fetchChannels = useCallback(async () => {
     setLoadingChannels(true)
@@ -4582,7 +4669,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
     } finally {
       setLoadingChannels(false)
     }
-  }, [token, onLogout])
+  }, [token, tenantId, onLogout])
 
   const fetchCostRecords = useCallback(async () => {
     try {
@@ -4880,15 +4967,16 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
   const liveNow = channels.filter(ch => ['active','streaming'].includes(ch.status)).length
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: TZ })
   const sessionsToday = tournaments.reduce((sum, t) => sum + (t.days || []).filter(d => d.date === todayStr).length, 0)
-  const totalCdnCost = cdnRecords.reduce((sum, r) => sum + (r.cost_total || 0), 0)
+  const totalCdnCost = cdnRecords
+    .filter(r => (r.tenant_id || 'default') === tenantId)
+    .reduce((sum, r) => sum + (r.cost_total || 0), 0)
 
   const isReadOnly = tenantRole === 'read_only'
 
   const NAV_ITEMS = [
     { section: 'MANAGEMENT', items: [
       { label: 'Live Streams',    tab: 'dashboard', view: 'streams', count: channels.length },
-      ...(isReadOnly ? [] : [{ label: 'Events', tab: 'dashboard', view: 'events', count: tournaments.length }]),
-      { label: 'Encoder Control', tab: 'encoders',  view: null },
+      { label: 'Encoders',        tab: 'encoders',  view: null },
     ]},
     ...(isReadOnly ? [] : [{ section: 'SYSTEM', items: [
       { label: 'Settings', tab: 'settings', view: null },
@@ -5252,6 +5340,10 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                       const syntheticPast = []
                       cdnRecords.forEach(r => {
                         if (!r.channel_id) return
+                        // cdn_records is agency-wide (Super Admins fetch it globally for
+                        // billing), but these synthetic rows back the per-tenant Live
+                        // Streams view — never let another tenant's history bleed in.
+                        if ((r.tenant_id || 'default') !== tenantId) return
                         // Skip if channel is currently live/scheduled in JW
                         if (jwActiveIds.has(r.channel_id)) return
                         // Skip if JW already has this channel on this same date
@@ -5288,23 +5380,6 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                           _cdnLabel:    dayLabel || r.label || null,
                         })
                       })
-
-                      // ── TEST ONLY — remove after verifying download card ─────
-                      syntheticPast.push({
-                        id:              'QX6C9TkF',
-                        _cdnDate:        '2026-04-07',
-                        name:            'Live Event Test',
-                        status:          'idle',
-                        stream_type:     'event',
-                        stream_url:      null,
-                        stream_start:    '2026-04-07T14:00:00Z',
-                        stream_end:      '2026-04-07T15:00:00Z',
-                        enable_live_to_vod: true,
-                        ingest_url:      null,
-                        ingest_key:      null,
-                        _fromCdn:        true,
-                      })
-                      // ── END TEST ─────────────────────────────────────────────
 
                       // ── Build full list and apply filter ─────────────────────
                       const allChannels = [...channels, ...syntheticPast].sort(sortByStart)
@@ -5520,7 +5595,12 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
 
           {activeTab === 'encoders' && (
             <Box sx={{ p: 2 }}>
-              <EncoderControl token={token} tenantId={tenantId} readOnly={tenantRole === 'read_only'} />
+              <Routes>
+                <Route index element={<EncoderList token={token} tenantId={tenantId} readOnly={isReadOnly} />} />
+                <Route path="new" element={<EncoderForm mode="create" token={token} tenantId={tenantId} />} />
+                <Route path=":id/edit" element={<EncoderForm mode="edit" token={token} tenantId={tenantId} />} />
+                <Route path=":id" element={<EncoderControl token={token} tenantId={tenantId} readOnly={isReadOnly} />} />
+              </Routes>
             </Box>
           )}
 
@@ -5540,9 +5620,6 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
           {activeTab === 'settings' && !isReadOnly && (
             <Box sx={{ p: 2, pb: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
 
-              {/* ── Tenant settings: Branding / Feature Flags / Colors ── */}
-              <TenantSettingsPanel token={token} tenantId={tenantId} />
-
               {/* ── Team: who has access to this organization ── */}
               <TenantMembersPanel token={token} tenantId={tenantId} canManage={tenantRole === 'admin' || isSuperAdmin} />
 
@@ -5551,6 +5628,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
 
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.1em', color: AP.muted, textTransform: 'uppercase' }}>Integrations</Typography>
+                  <JwPlayerSettingsPanel    token={token} tenantId={tenantId} />
                   <YouTubeIntegrationPanel  token={token} tenantId={tenantId} />
                   <FacebookIntegrationPanel token={token} tenantId={tenantId} />
                   <BrightSpotSettingsPanel  token={token} tenantId={tenantId} />

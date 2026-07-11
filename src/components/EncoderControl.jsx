@@ -1,14 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import Hls from 'hls.js'
 import './EncoderControl.css'
 
 const JW_PLAYER_ID = 'Sx2qhN0M'
 
-const ENCODERS = [
-  { id: 'blue',  label: 'Blue Encoder',  accent: '#3b82f6', glow: 'rgba(59,130,246,0.3)', mediaId: 'LOeW3t4d', streamUrl: 'https://cdn.jwplayer.com/live/broadcast/LOeW3t4d.m3u8', streamId: 'LOeW3t4d', ingestUrl: 'srt://ingest-07f51a1cb195.jwplive.com:8000/?streamid=#!::r=live/2U2EkO6H,m=publish' },
-  { id: 'red',   label: 'Red Encoder',   accent: '#ef4444', glow: 'rgba(239,68,68,0.3)',  mediaId: 'ruOzZOR2', streamUrl: 'https://cdn.jwplayer.com/live/broadcast/ruOzZOR2.m3u8', streamId: 'ruOzZOR2', ingestUrl: 'srt://ingest-8887b9511ed6.jwplive.com:8000/?streamid=#!::r=live/gcstK3La,m=publish' },
-  { id: 'green', label: 'Green Encoder', accent: '#22c55e', glow: 'rgba(34,197,94,0.3)',  mediaId: '2oVNTHgv', streamUrl: 'https://cdn.jwplayer.com/live/broadcast/2oVNTHgv.m3u8', streamId: '2oVNTHgv', ingestUrl: 'srt://ingest-4480e407b9c1.jwplive.com:8000/?streamid=#!::r=live/LO3YbueP,m=publish' },
-]
+const ENCODER_ACCENT = '#6366f1'
+const ENCODER_GLOW   = 'rgba(99,102,241,0.3)'
+
+function authHeader(token, tenantId) {
+  return {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    ...(tenantId ? { 'X-Tenant-Id': tenantId } : {}),
+  }
+}
+
+/** Maps a DB encoder row to the shape EncoderRow/its children expect. */
+function toEncoderCardData(row) {
+  return {
+    id:         row.id,
+    label:      row.name,
+    description: row.description,
+    accent:     ENCODER_ACCENT,
+    glow:       ENCODER_GLOW,
+    mediaId:    row.channel_id,
+    streamId:   row.channel_id,
+    streamUrl:  `https://cdn.jwplayer.com/live/broadcast/${row.channel_id}.m3u8`,
+    ingestUrl:  row.ingest_url || '',
+  }
+}
 
 function simulateStep(ms = 1800) {
   return new Promise(res => setTimeout(res, ms))
@@ -733,6 +754,13 @@ function BroadcastHistory({ history, onClear, loading }) {
 
 // ── Encoder Control ──
 export default function EncoderControl({ token, tenantId, readOnly }) {
+  const { id } = useParams()
+  const navigate = useNavigate()
+
+  const [encoderRow, setEncoderRow]     = useState(null)
+  const [encoderLoading, setEncoderLoading] = useState(true)
+  const [encoderError, setEncoderError] = useState('')
+
   const [history, setHistory]           = useState([])
   const [historyLoading, setHistoryLoading] = useState(true)
   const [streams247, setStreams247]         = useState([])
@@ -740,6 +768,21 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
   const [streamSelections, setStreamSelections] = useState(() => {
     try { return JSON.parse(localStorage.getItem('encoderStreamSelections') || '{}') } catch { return {} }
   })
+
+  useEffect(() => {
+    if (!token || !tenantId || !id) { setEncoderLoading(false); return }
+    setEncoderLoading(true)
+    setEncoderError('')
+    fetch(`/api/encoders?id=${encodeURIComponent(id)}`, { headers: authHeader(token, tenantId) })
+      .then(async r => {
+        const data = await r.json()
+        if (!r.ok) throw new Error(data.error || 'Failed to load encoder')
+        return data
+      })
+      .then(data => setEncoderRow(data))
+      .catch(err => setEncoderError(err.message))
+      .finally(() => setEncoderLoading(false))
+  }, [token, tenantId, id])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -783,21 +826,45 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     })
   }
 
+  if (encoderLoading) {
+    return (
+      <div className="ec-root">
+        <div className="ec-header-loading">Loading encoder…</div>
+      </div>
+    )
+  }
+
+  if (encoderError || !encoderRow) {
+    return (
+      <div className="ec-root">
+        <div className="ec-header-error">
+          {encoderError || 'Encoder not found.'}
+          <button className="ec-back-link" onClick={() => navigate('/admin/encoders')}>← Back to Encoders</button>
+        </div>
+      </div>
+    )
+  }
+
+  const encoder = toEncoderCardData(encoderRow)
+
   return (
     <div className="ec-root">
+      <div className="ec-page-header">
+        <button className="ec-back-link" onClick={() => navigate('/admin/encoders')}>← Back to Encoders</button>
+        <h1 className="ec-page-title">{encoder.label}</h1>
+        {encoder.description && <p className="ec-page-subtitle">{encoder.description}</p>}
+      </div>
       <div className="ec-encoders">
-        {ENCODERS.map(enc => (
-          <EncoderRow
-            key={enc.id}
-            encoder={enc}
-            onBroadcastEnd={handleBroadcastEnd}
-            streams247={streams247}
-            streamsLoading={streamsLoading}
-            selectedStreamId={streamSelections[enc.id] || ''}
-            onSelectStream={channelId => handleSelectStream(enc.id, channelId)}
-            readOnly={readOnly}
-          />
-        ))}
+        <EncoderRow
+          key={encoder.id}
+          encoder={encoder}
+          onBroadcastEnd={handleBroadcastEnd}
+          streams247={streams247}
+          streamsLoading={streamsLoading}
+          selectedStreamId={streamSelections[encoder.id] || ''}
+          onSelectStream={channelId => handleSelectStream(encoder.id, channelId)}
+          readOnly={readOnly}
+        />
       </div>
       <FastChannelPlayer />
       <BroadcastHistory history={history} onClear={handleClearHistory} loading={historyLoading} />
