@@ -32,6 +32,43 @@ const INGEST_FORMAT_LABELS = {
   hls: 'HLS (Push)', hls_pull: 'HLS (Pull)', rtp: 'RTP', rtp_fec: 'RTP + FEC',
 }
 
+// Encoders don't carry their own persisted "live" flag — the underlying 24/7
+// channel does (via JW). Mirrors the palette used for the Live Streams list.
+const CHANNEL_STATUS_CFG = {
+  active:     { label: 'Live',       color: '#10b981', bg: 'rgba(16,185,129,0.15)',  border: 'rgba(16,185,129,0.4)',  pulse: true  },
+  streaming:  { label: 'Live',       color: '#10b981', bg: 'rgba(16,185,129,0.15)',  border: 'rgba(16,185,129,0.4)',  pulse: true  },
+  starting:   { label: 'Starting',   color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  border: 'rgba(56,189,248,0.35)', pulse: true  },
+  creating:   { label: 'Creating',   color: '#f59e0b', bg: 'rgba(245,158,11,0.15)',  border: 'rgba(245,158,11,0.4)',  pulse: true  },
+  ready:      { label: 'Ready',      color: '#57BB95', bg: 'rgba(87,187,149,0.15)',  border: 'rgba(87,187,149,0.4)',  pulse: false },
+  stopping:   { label: 'Stopping',   color: '#f87171', bg: 'rgba(239,68,68,0.12)',   border: 'rgba(239,68,68,0.35)',  pulse: true  },
+  destroying: { label: 'Destroying', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',   border: 'rgba(245,158,11,0.35)', pulse: true  },
+  idle:       { label: 'Offline',    color: '#94a3b8', bg: 'rgba(100,116,139,0.15)', border: 'rgba(100,116,139,0.4)', pulse: false },
+}
+
+function EncoderStatusChip({ status, loading }) {
+  if (loading) return null
+  const cfg = CHANNEL_STATUS_CFG[status?.toLowerCase()] || {
+    label: status ? status : 'Unknown', color: AP.muted,
+    bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.25)', pulse: false,
+  }
+  return (
+    <Box sx={{
+      display: 'inline-flex', alignItems: 'center', gap: 0.5, px: '7px', height: 20,
+      borderRadius: '5px', fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.04em',
+      bgcolor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, flexShrink: 0,
+    }}>
+      {cfg.pulse && (
+        <Box sx={{
+          width: 5, height: 5, borderRadius: '50%', bgcolor: cfg.color, flexShrink: 0,
+          animation: 'encStatusPulse 1.6s ease-in-out infinite',
+          '@keyframes encStatusPulse': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.3 } },
+        }} />
+      )}
+      {cfg.label}
+    </Box>
+  )
+}
+
 function SimulcastBadges({ encoder }) {
   const dests = [
     encoder.simulcast_website  && { key: 'website',  label: 'Website' },
@@ -54,7 +91,7 @@ function SimulcastBadges({ encoder }) {
   )
 }
 
-function EncoderCard({ encoder, readOnly, onEdit, onOpen, onDelete }) {
+function EncoderCard({ encoder, channelStatus, channelStatusLoading, readOnly, onEdit, onOpen, onDelete }) {
   return (
     <Box sx={{
       border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)',
@@ -62,7 +99,10 @@ function EncoderCard({ encoder, readOnly, onEdit, onOpen, onDelete }) {
     }}>
       <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
         <Box sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff' }}>{encoder.name}</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff' }}>{encoder.name}</Typography>
+            <EncoderStatusChip status={channelStatus} loading={channelStatusLoading} />
+          </Box>
           {encoder.description && (
             <Typography sx={{ fontSize: '0.75rem', color: AP.muted, mt: 0.25 }}>{encoder.description}</Typography>
           )}
@@ -123,6 +163,9 @@ export default function EncoderList({ token, tenantId, readOnly }) {
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState('')
 
+  const [channels, setChannels] = useState([])
+  const [channelsLoading, setChannelsLoading] = useState(true)
+
   const fetchEncoders = useCallback(() => {
     setLoading(true)
     setError('')
@@ -138,6 +181,20 @@ export default function EncoderList({ token, tenantId, readOnly }) {
   }, [token, tenantId])
 
   useEffect(() => { fetchEncoders() }, [fetchEncoders])
+
+  // Each encoder's "status" is really its assigned channel's current JW state —
+  // encoders themselves have no persisted live/offline flag of their own.
+  useEffect(() => {
+    setChannelsLoading(true)
+    fetch('/api/channels', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : { channels: [] })
+      .then(data => setChannels(data.channels || []))
+      .catch(() => setChannels([]))
+      .finally(() => setChannelsLoading(false))
+  }, [token, tenantId])
+
+  const channelStatusById = {}
+  channels.forEach(c => { channelStatusById[c.id] = c.status })
 
   async function handleDelete(encoder) {
     if (!confirm(`Delete encoder "${encoder.name}"?\n\nThis cannot be undone.`)) return
@@ -204,6 +261,8 @@ export default function EncoderList({ token, tenantId, readOnly }) {
             <EncoderCard
               key={encoder.id}
               encoder={encoder}
+              channelStatus={channelStatusById[encoder.channel_id]}
+              channelStatusLoading={channelsLoading}
               readOnly={readOnly}
               onEdit={e => navigate(`/admin/encoders/${e.id}/edit`)}
               onOpen={e => navigate(`/admin/encoders/${e.id}`)}
