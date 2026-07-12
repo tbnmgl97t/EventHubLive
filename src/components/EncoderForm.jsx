@@ -140,7 +140,12 @@ export default function EncoderForm({ token, tenantId, mode }) {
         if (!r.ok) throw new Error(data.error || 'Failed to load encoder')
         return data
       })
-      .then(data => setForm({ ...EMPTY_FORM, ...data }))
+      .then(data => {
+        setForm({ ...EMPTY_FORM, ...data })
+        // The saved row can go stale (e.g. the channel's ingest format changed,
+        // or was recorded wrong at creation time) — refresh from JW directly.
+        if (data.channel_id) lookupIngestDetails(data.channel_id)
+      })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
   }, [isEdit, id, token, tenantId])
