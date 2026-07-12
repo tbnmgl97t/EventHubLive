@@ -47,6 +47,8 @@ import { supabase } from '../lib/supabaseClient'
 
 const SESSION_KEY       = 'ri_admin_token'
 const ACTIVE_TENANT_KEY = 'ri_active_tenant'
+// Temporary flag — set to true to restore the dashboard stat cards (Live Now / Sessions Today / Event Cost / Total Streams)
+const SHOW_STATS_ROW = false
 const ROLE_KEY          = 'ri_admin_role'
 
 /** Normalise legacy camera1/camera2 fields into a streams array */
@@ -5178,7 +5180,8 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
 
           {activeTab === 'dashboard' && (
             <>
-              {/* Stats row */}
+              {/* Stats row — temporarily hidden; flip SHOW_STATS_ROW to true to restore */}
+              {SHOW_STATS_ROW && (
               <Box display="grid" sx={{ gridTemplateColumns: { xs: 'repeat(2,1fr)', md: 'repeat(4,1fr)' }, gap: { xs: 1, sm: 1.5 }, p: { xs: 1, sm: 2 }, pb: 0 }}>
                 {[
                   { label: 'Live Now',       value: liveNow,        color: AP.live,    dim: AP.liveDim   },
@@ -5196,6 +5199,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                   </Paper>
                 ))}
               </Box>
+              )}
 
               {/* Single-panel content area — switches based on nav selection */}
               <Box sx={{ p: { xs: 1, sm: 2 } }}>
