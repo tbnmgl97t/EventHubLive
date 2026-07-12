@@ -393,23 +393,17 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [encoder?.id, youtubeConnected, facebookConnected])
 
-  // Default the broadcast title to the encoder's name — editable before going live,
-  // sent to BrightSpot (article/asset title) and used as the JW clip title on stop.
-  useEffect(() => {
-    if (encoder && !broadcastTitle) setBroadcastTitle(encoder.name)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [encoder?.id])
-
   function toggleDest(key, value) {
     setDestinations(prev => ({ ...prev, [key]: value }))
   }
 
   async function handleGoLive() {
+    const title = broadcastTitle.trim()
+    if (!title) return
     setBroadcastState('going_live')
     setGoLiveError('')
     setGoLiveResults(null)
     const activeDests = Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
-    const title = broadcastTitle.trim() || encoder.name
 
     try {
       const res = await fetch('/api/encoder-go-live', {
@@ -437,7 +431,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     const startedAt = liveStartedAt
     const endedAt = Date.now()
     const activeDests = Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
-    const title = broadcastTitle.trim() || encoder.name
+    const title = broadcastTitle.trim()
 
     try {
       const res = await fetch('/api/encoder-stop', {
@@ -462,7 +456,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     setLiveStartedAt(null)
     setGoLiveResults(null)
     setBroadcastState('preview')
-    setBroadcastTitle(encoder.name) // reset for the next broadcast
+    setBroadcastTitle('') // clear — the next broadcast must be named again before going live
     setTimeout(fetchHistory, 3000)
   }
 
@@ -471,6 +465,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     : broadcastState
 
   const anyDestSelected = Object.values(destinations).some(Boolean)
+  const hasTitle = broadcastTitle.trim().length > 0
   const destsLocked = broadcastState === 'live' || broadcastState === 'stopping' || broadcastState === 'going_live'
 
   const mediaId   = encoder?.channel_id
@@ -621,10 +616,11 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
           <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
             {broadcastState === 'preview' ? (
               <TextField
-                size="small" label="Broadcast Title" fullWidth
+                size="small" label="Broadcast Title" required fullWidth
                 value={broadcastTitle} onChange={e => setBroadcastTitle(e.target.value)}
                 disabled={readOnly}
-                helperText="Used as the BrightSpot article title and the clip's title once this broadcast ends"
+                placeholder="e.g. Breaking News: Storm Coverage"
+                helperText="Required — used as the BrightSpot article title and the clip's title once this broadcast ends"
               />
             ) : (
               <Box>
@@ -639,7 +635,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
             {(broadcastState === 'preview' || broadcastState === 'going_live') && (
               <Button
                 fullWidth variant="contained" startIcon={broadcastState === 'going_live' ? null : <FiberManualRecordIcon />}
-                onClick={handleGoLive} disabled={readOnly || broadcastState === 'going_live' || !anyDestSelected}
+                onClick={handleGoLive} disabled={readOnly || broadcastState === 'going_live' || !anyDestSelected || !hasTitle}
                 sx={{
                   bgcolor: AP.danger, color: '#fff', fontWeight: 800, py: 1.3, minHeight: 48, fontSize: '1rem', letterSpacing: '0.04em',
                   '&:hover': { bgcolor: '#dc2626' }, '&.Mui-disabled': { bgcolor: 'rgba(239,68,68,0.35)', color: 'rgba(255,255,255,0.5)' },
@@ -648,7 +644,10 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
                 {broadcastState === 'going_live' ? (<><CircularProgress size={16} sx={{ color: '#fff', mr: 1 }} /> Going live…</>) : 'GO LIVE'}
               </Button>
             )}
-            {broadcastState === 'preview' && !anyDestSelected && (
+            {broadcastState === 'preview' && !hasTitle && (
+              <Typography sx={{ fontSize: '0.7rem', color: AP.warn, textAlign: 'center' }}>Enter a broadcast title to go live.</Typography>
+            )}
+            {broadcastState === 'preview' && hasTitle && !anyDestSelected && (
               <Typography sx={{ fontSize: '0.7rem', color: AP.warn, textAlign: 'center' }}>Select at least one destination to go live.</Typography>
             )}
 
