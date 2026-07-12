@@ -104,7 +104,7 @@ export default async function handler(req, res) {
   } else if (!encoder.channel_id || !started_at || !ended_at) {
     clipError = 'Missing channel or broadcast timestamps for clipping'
   } else {
-    const clipUrl = `https://api.jwplayer.com/v2/sites/${jw.siteId}/live_broadcast_streams/${encoder.channel_id}/clip`
+    const clipUrl = `https://api.jwplayer.com/v2/sites/${jw.siteId}/live/broadcast/streams/${encoder.channel_id}/clip/`
     try {
       const r = await fetch(clipUrl, {
         method: 'PUT',
