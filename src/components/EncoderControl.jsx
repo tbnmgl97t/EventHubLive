@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Box, Typography, Button, CircularProgress, Alert, Chip, IconButton, Switch,
-  Collapse, Table, TableHead, TableBody, TableRow, TableCell, Tooltip,
+  Collapse, Table, TableHead, TableBody, TableRow, TableCell, Tooltip, TextField,
   Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material'
 import ArrowBackIcon        from '@mui/icons-material/ArrowBack'
@@ -321,6 +321,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
   const [destinations, setDestinations]     = useState({ website: true, youtube: false, facebook: false, app: false })
   const [liveStartedAt, setLiveStartedAt]   = useState(null)
   const [lastBroadcast, setLastBroadcast]   = useState(null)
+  const [broadcastTitle, setBroadcastTitle] = useState('')
   const [credentialsOpen, setCredentialsOpen] = useState(false)
   const [confirmStopOpen, setConfirmStopOpen] = useState(false)
 
@@ -392,6 +393,13 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [encoder?.id, youtubeConnected, facebookConnected])
 
+  // Default the broadcast title to the encoder's name — editable before going live,
+  // sent to BrightSpot (article/asset title) and used as the JW clip title on stop.
+  useEffect(() => {
+    if (encoder && !broadcastTitle) setBroadcastTitle(encoder.name)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [encoder?.id])
+
   function toggleDest(key, value) {
     setDestinations(prev => ({ ...prev, [key]: value }))
   }
@@ -401,12 +409,13 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     setGoLiveError('')
     setGoLiveResults(null)
     const activeDests = Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
+    const title = broadcastTitle.trim() || encoder.name
 
     try {
       const res = await fetch('/api/encoder-go-live', {
         method: 'POST',
         headers: authHeader(token, tenantId),
-        body: JSON.stringify({ encoder_id: id, destinations: activeDests }),
+        body: JSON.stringify({ encoder_id: id, destinations: activeDests, title }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to go live')
@@ -428,6 +437,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     const startedAt = liveStartedAt
     const endedAt = Date.now()
     const activeDests = Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
+    const title = broadcastTitle.trim() || encoder.name
 
     try {
       const res = await fetch('/api/encoder-stop', {
@@ -438,6 +448,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
           started_at: new Date(startedAt).toISOString(),
           ended_at:   new Date(endedAt).toISOString(),
           destinations: activeDests,
+          title,
         }),
       })
       const data = await res.json().catch(() => ({}))
@@ -447,10 +458,11 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
       setGoLiveError(err.message)
     }
 
-    setLastBroadcast({ startedAt, endedAt, destinations: activeDests, clipping: true })
+    setLastBroadcast({ startedAt, endedAt, destinations: activeDests, title, clipping: true })
     setLiveStartedAt(null)
     setGoLiveResults(null)
     setBroadcastState('preview')
+    setBroadcastTitle(encoder.name) // reset for the next broadcast
     setTimeout(fetchHistory, 3000)
   }
 
@@ -607,6 +619,23 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
 
           {/* Go Live section */}
           <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+            {broadcastState === 'preview' ? (
+              <TextField
+                size="small" label="Broadcast Title" fullWidth
+                value={broadcastTitle} onChange={e => setBroadcastTitle(e.target.value)}
+                disabled={readOnly}
+                helperText="Used as the BrightSpot article title and the clip's title once this broadcast ends"
+              />
+            ) : (
+              <Box>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase' }}>
+                  Broadcast Title
+                </Typography>
+                <Typography sx={{ fontSize: '0.9rem', fontWeight: 600, color: AP.text }}>
+                  {broadcastTitle}
+                </Typography>
+              </Box>
+            )}
             {(broadcastState === 'preview' || broadcastState === 'going_live') && (
               <Button
                 fullWidth variant="contained" startIcon={broadcastState === 'going_live' ? null : <FiberManualRecordIcon />}
@@ -652,11 +681,16 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
               {(() => {
                 const isLiveNow = broadcastState === 'live' || broadcastState === 'stopping'
                 const startedAt = isLiveNow ? liveStartedAt : lastBroadcast?.startedAt
+                const title = isLiveNow ? broadcastTitle : lastBroadcast?.title
                 const activeDests = isLiveNow
                   ? Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
                   : (lastBroadcast?.destinations || [])
                 return (
                   <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+                      <Typography sx={{ fontSize: '0.78rem', color: AP.muted, flexShrink: 0 }}>Title</Typography>
+                      <Typography sx={{ fontSize: '0.78rem', color: AP.text, textAlign: 'right' }}>{title || '—'}</Typography>
+                    </Box>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                       <Typography sx={{ fontSize: '0.78rem', color: AP.muted }}>Start time</Typography>
                       <Typography sx={{ fontSize: '0.78rem', color: AP.text }}>{startedAt ? formatDateTime(startedAt) : '—'}</Typography>

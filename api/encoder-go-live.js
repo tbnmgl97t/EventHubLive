@@ -15,10 +15,11 @@ import { youtubeRequest }       from './_utils/youtube.js'
 
 // TODO: Replace with real BrightSpot publish API call
 // The BrightSpot REST endpoint to publish a live stream article is not yet confirmed.
-// Expected call: POST {brightspot_cms_url}/api/editorial/live-streams with the JW channel embed code.
+// Expected call: POST {brightspot_cms_url}/api/editorial/live-streams with the JW channel embed
+// code and `title` as the article's headline/asset title.
 // For now, log the intent and return success so the rest of orchestration proceeds.
-async function publishToBrightSpot(tenant, encoder) {
-  console.log(`[BrightSpot STUB] Would publish stream "${encoder.name}" to ${tenant.brightspot_cms_url}`)
+async function publishToBrightSpot(tenant, encoder, title) {
+  console.log(`[BrightSpot STUB] Would publish stream "${title}" to ${tenant.brightspot_cms_url}`)
   // When real API is known, call brightspot-proxy with the correct endpoint + payload
   return { success: true, stub: true }
 }
@@ -26,8 +27,8 @@ async function publishToBrightSpot(tenant, encoder) {
 // TODO: Replace with real BrightSpot MRSS enable call
 // Expected: PUT/PATCH {brightspot_cms_url}/api/editorial/mrss-feeds/{feedId} to set enabled=true
 // The feedId likely maps to the JW channel_id stored on the encoder.
-async function enableMRSSFeed(tenant, encoder) {
-  console.log(`[BrightSpot MRSS STUB] Would enable MRSS feed for channel ${encoder.channel_id}`)
+async function enableMRSSFeed(tenant, encoder, title) {
+  console.log(`[BrightSpot MRSS STUB] Would enable MRSS feed "${title}" for channel ${encoder.channel_id}`)
   return { success: true, stub: true }
 }
 
@@ -48,8 +49,8 @@ async function goLiveYouTube(tenant, encoder) {
 // Facebook RTMP destination (bound once at simulcast setup, same idea as
 // youtube_broadcast_id above), which isn't tracked per-encoder yet.
 // For now, log the intent and return success so the rest of orchestration proceeds.
-async function goLiveFacebook(tenant, encoder) {
-  console.log(`[Facebook STUB] Would go live on Facebook for "${encoder.name}" (page: ${tenant.facebook_page_name || tenant.facebook_page_id || 'not connected'})`)
+async function goLiveFacebook(tenant, encoder, title) {
+  console.log(`[Facebook STUB] Would go live on Facebook as "${title}" (page: ${tenant.facebook_page_name || tenant.facebook_page_id || 'not connected'})`)
   return { success: true, stub: true }
 }
 
@@ -67,7 +68,7 @@ export default async function handler(req, res) {
   if (!session.tenantId || !session.tenantRole) return res.status(403).json({ error: 'Not a member of this tenant' })
   if (!canWrite(session)) return res.status(403).json({ error: 'Forbidden' })
 
-  const { encoder_id, destinations } = req.body || {}
+  const { encoder_id, destinations, title } = req.body || {}
   if (!encoder_id) return res.status(400).json({ error: 'encoder_id is required' })
   if (!Array.isArray(destinations) || destinations.length === 0) {
     return res.status(400).json({ error: 'destinations must be a non-empty array' })
@@ -92,7 +93,7 @@ export default async function handler(req, res) {
     const fn = HANDLERS[dest]
     if (!fn) { results[dest] = { success: false, error: `Unknown destination: ${dest}` }; return }
     try {
-      const outcome = await fn(tenant || {}, encoder)
+      const outcome = await fn(tenant || {}, encoder, title || encoder.name)
       results[dest] = { success: true, ...outcome }
     } catch (err) {
       console.error(`[encoder-go-live] ${dest} failed:`, err.message)
