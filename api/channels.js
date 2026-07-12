@@ -1,6 +1,10 @@
 import { resolveTenantSession, getTenantJwCreds } from './_utils/tenant.js'
 import { supabase }    from './_utils/supabase.js'
 
+// Same set EncoderForm.jsx offers for "Ingest Format" — checked in order,
+// preferring whichever format the stream actually reports first.
+const INGEST_FORMATS = ['rtmp', 'rtmps', 'srt', 'srt_pull', 'hls', 'hls_pull', 'rtp', 'rtp_fec']
+
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).end()
   const session = await resolveTenantSession(req)
@@ -59,7 +63,16 @@ export default async function handler(req, res) {
     const data = JSON.parse(body)
     const raw = data.streams || data.broadcast_streams || data.items || data.results || []
     const channels = raw.map(ch => {
-      const rtmp          = ch.metadata?.ingest?.rtmp?.ingest_point
+      // Ingest credentials are nested under metadata.ingest.<format>, keyed by
+      // whatever format the stream was actually provisioned with — not just rtmp.
+      const ingestMeta       = ch.metadata?.ingest || {}
+      const preferredFormat  = ch.ingest_format || ch.metadata?.ingest_format
+      const orderedFormats   = preferredFormat
+        ? [preferredFormat, ...INGEST_FORMATS.filter(f => f !== preferredFormat)]
+        : INGEST_FORMATS
+      const ingestPoint = orderedFormats
+        .map(fmt => ingestMeta[fmt]?.ingest_point)
+        .find(point => point?.url || point?.key) || null
       const ingestPointId = ch.relationships?.ingest_point?.id || null
       // Derive display status from metadata.status + playout.availability
       // JW returns raw "streaming" for both preview and active, and "destroying" for stopping
@@ -87,8 +100,8 @@ export default async function handler(req, res) {
         stream_start:     ch.metadata?.stream_start || null,
         stream_end:       ch.metadata?.stream_end   || null,
         created_at:       ch.created || ch.created_at || null,
-        ingest_url:       rtmp?.url  || null,
-        ingest_key:       rtmp?.key  || null,
+        ingest_url:       ingestPoint?.url  || null,
+        ingest_key:       ingestPoint?.key  || null,
         ingest_format:    ch.ingest_format || null,
         ingest_point_id:  ingestPointId,
         ingest_point_name: ingestNameMap[ingestPointId] || null,

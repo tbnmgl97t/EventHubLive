@@ -968,8 +968,9 @@ export default function StreamPage() {
               {channel.id}{channel.stream_type ? ` · ${channel.stream_type}` : ''}
             </Typography>
           </Box>
-          {/* Status — hidden for ready (button handles it) and preview (badge is on the player) */}
-          {(s !== 'ready' || waitingForStart || starting) && s !== 'preview' && <Box sx={{
+          {/* Status — hidden for ready (button handles it), preview (badge is on the player),
+              and live (the CDN feed card already shows its own LIVE badge) */}
+          {(s !== 'ready' || waitingForStart || starting) && s !== 'preview' && !isLive && <Box sx={{
             display: 'flex', alignItems: 'center', gap: 0.65,
             px: 1.2, py: 0.45, borderRadius: '20px',
             bgcolor: statusCfg.bg, border: `1px solid ${statusCfg.border}`, flexShrink: 0,
@@ -982,9 +983,6 @@ export default function StreamPage() {
               },
             }),
           }}>
-            {/* Live dot */}
-            {isLive && <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: statusCfg.color, boxShadow: `0 0 6px ${statusCfg.color}`,
-              animation: 'ld 1.8s ease-in-out infinite', '@keyframes ld': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.3 } } }} />}
             {/* Spinning mini ring for transient states */}
             {(pillStatus === 'creating' || pillStatus === 'starting' || pillStatus === 'stopping') && (
               <Box sx={{

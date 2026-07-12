@@ -100,12 +100,36 @@ export default function EncoderForm({ token, tenantId, mode }) {
   const [channels, setChannels] = useState([])
   const [channelsLoading, setChannelsLoading] = useState(false)
   const [manualChannel, setManualChannel] = useState(false)
+  const [ingestLookupLoading, setIngestLookupLoading] = useState(false)
 
   const [autoCreateYoutube, setAutoCreateYoutube] = useState(false)
   const [youtubeBroadcastTitle, setYoutubeBroadcastTitle] = useState('')
   const [creatingBroadcast, setCreatingBroadcast] = useState(false)
 
   const set = (key, value) => setForm(prev => ({ ...prev, [key]: value }))
+
+  // Fetches the stream's live ingest credentials from JW directly — the bulk
+  // /api/channels list only carries whatever ingest snapshot it happened to
+  // have on hand, so re-fetch fresh details for the one channel just picked.
+  function lookupIngestDetails(channelId) {
+    setIngestLookupLoading(true)
+    fetch(`/api/stream-ingest?id=${encodeURIComponent(channelId)}`, { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return
+        setForm(prev => {
+          if (prev.channel_id !== channelId) return prev // user picked a different channel while this was in flight
+          return {
+            ...prev,
+            ingest_url:    data.ingest_url    || prev.ingest_url,
+            stream_key:    data.ingest_key    || prev.stream_key,
+            ingest_format: data.ingest_format || prev.ingest_format,
+          }
+        })
+      })
+      .catch(() => {})
+      .finally(() => setIngestLookupLoading(false))
+  }
 
   const fetchEncoder = useCallback(() => {
     if (!isEdit || !id) return
@@ -312,6 +336,7 @@ export default function EncoderForm({ token, tenantId, mode }) {
                     ingest_url: ch?.ingest_url || prev.ingest_url,
                     stream_key: ch?.ingest_key || prev.stream_key,
                   }))
+                  if (e.target.value) lookupIngestDetails(e.target.value)
                 }}
                 disabled={channelsLoading}
                 helperText={channelsLoading ? 'Loading 24/7 channels…' : (channels.length === 0 ? 'No 24/7 channels found — enter one manually' : undefined)}
@@ -344,6 +369,7 @@ export default function EncoderForm({ token, tenantId, mode }) {
               size="small" label="JW Ingest URL" fullWidth
               value={form.ingest_url || ''} onChange={e => set('ingest_url', e.target.value)}
               placeholder="The URL your operator enters into the hardware encoder"
+              helperText={ingestLookupLoading ? 'Looking up ingest details…' : undefined}
             />
             <TextField
               size="small" label="JW Stream Key" fullWidth
