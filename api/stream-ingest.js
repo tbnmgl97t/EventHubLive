@@ -43,10 +43,18 @@ export default async function handler(req, res) {
       }
     }
 
+    if (!ingestPoint) {
+      // The rtmp shape (metadata.ingest.<format>.ingest_point.{url,key}) may not
+      // hold for every format — log what JW actually sent so this is diagnosable
+      // without guessing again.
+      console.log('[stream-ingest] no ingest_point found for', id, 'preferredFormat:', preferredFormat, 'metadata.ingest:', JSON.stringify(ch.metadata?.ingest))
+    }
+
     return res.status(200).json({
       ingest_url:    ingestPoint?.url || null,
       ingest_key:    ingestPoint?.key || null,
       ingest_format: ingestFormat,
+      ...(ingestPoint ? {} : { debug_ingest_metadata: ch.metadata?.ingest || null }),
     })
   } catch (err) {
     return res.status(500).json({ error: err.message })

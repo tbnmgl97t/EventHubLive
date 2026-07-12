@@ -7,6 +7,7 @@ import {
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
+import RefreshIcon from '@mui/icons-material/Refresh'
 
 const AP = {
   accent:    '#6366f1',
@@ -101,6 +102,7 @@ export default function EncoderForm({ token, tenantId, mode }) {
   const [channelsLoading, setChannelsLoading] = useState(false)
   const [manualChannel, setManualChannel] = useState(false)
   const [ingestLookupLoading, setIngestLookupLoading] = useState(false)
+  const [ingestLookupError, setIngestLookupError] = useState('')
 
   const [autoCreateYoutube, setAutoCreateYoutube] = useState(false)
   const [youtubeBroadcastTitle, setYoutubeBroadcastTitle] = useState('')
@@ -112,11 +114,20 @@ export default function EncoderForm({ token, tenantId, mode }) {
   // /api/channels list only carries whatever ingest snapshot it happened to
   // have on hand, so re-fetch fresh details for the one channel just picked.
   function lookupIngestDetails(channelId) {
+    if (!channelId) return
     setIngestLookupLoading(true)
+    setIngestLookupError('')
     fetch(`/api/stream-ingest?id=${encodeURIComponent(channelId)}`, { headers: authHeader(token, tenantId) })
-      .then(r => r.ok ? r.json() : null)
+      .then(async r => {
+        const data = await r.json().catch(() => null)
+        if (!r.ok) throw new Error(data?.error || `Failed to look up ingest details (${r.status})`)
+        return data
+      })
       .then(data => {
-        if (!data) return
+        if (!data?.ingest_url && !data?.ingest_key) {
+          setIngestLookupError('JW returned no ingest details for this channel — enter them manually below.')
+          return
+        }
         setForm(prev => {
           if (prev.channel_id !== channelId) return prev // user picked a different channel while this was in flight
           return {
@@ -127,9 +138,17 @@ export default function EncoderForm({ token, tenantId, mode }) {
           }
         })
       })
-      .catch(() => {})
+      .catch(err => setIngestLookupError(err.message))
       .finally(() => setIngestLookupLoading(false))
   }
+
+  // Fires whenever the assigned channel actually changes (including the
+  // initial load in edit mode) — but reselecting the *same* channel from the
+  // dropdown doesn't change this value, so the refresh button below covers that.
+  useEffect(() => {
+    if (form.channel_id) lookupIngestDetails(form.channel_id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.channel_id])
 
   const fetchEncoder = useCallback(() => {
     if (!isEdit || !id) return
@@ -140,12 +159,7 @@ export default function EncoderForm({ token, tenantId, mode }) {
         if (!r.ok) throw new Error(data.error || 'Failed to load encoder')
         return data
       })
-      .then(data => {
-        setForm({ ...EMPTY_FORM, ...data })
-        // The saved row can go stale (e.g. the channel's ingest format changed,
-        // or was recorded wrong at creation time) — refresh from JW directly.
-        if (data.channel_id) lookupIngestDetails(data.channel_id)
-      })
+      .then(data => setForm({ ...EMPTY_FORM, ...data }))
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
   }, [isEdit, id, token, tenantId])
@@ -341,7 +355,6 @@ export default function EncoderForm({ token, tenantId, mode }) {
                     ingest_url: ch?.ingest_url || prev.ingest_url,
                     stream_key: ch?.ingest_key || prev.stream_key,
                   }))
-                  if (e.target.value) lookupIngestDetails(e.target.value)
                 }}
                 disabled={channelsLoading}
                 helperText={channelsLoading ? 'Loading 24/7 channels…' : (channels.length === 0 ? 'No 24/7 channels found — enter one manually' : undefined)}
@@ -367,9 +380,24 @@ export default function EncoderForm({ token, tenantId, mode }) {
               </TextField>
             </Box>
 
-            <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1', mt: 0.5 }}>
-              HARDWARE ENCODER CONFIG
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.5 }}>
+              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1' }}>
+                HARDWARE ENCODER CONFIG
+              </Typography>
+              <Button
+                size="small" onClick={() => lookupIngestDetails(form.channel_id)}
+                disabled={!form.channel_id || ingestLookupLoading}
+                startIcon={ingestLookupLoading ? <CircularProgress size={12} sx={{ color: 'inherit' }} /> : <RefreshIcon sx={{ fontSize: 14 }} />}
+                sx={{ fontSize: '0.68rem', color: AP.accent, textTransform: 'none', p: 0, minWidth: 0 }}
+              >
+                Refresh from channel
+              </Button>
+            </Box>
+            {ingestLookupError && (
+              <Alert severity="warning" sx={{ fontSize: '0.75rem' }} onClose={() => setIngestLookupError('')}>
+                {ingestLookupError}
+              </Alert>
+            )}
             <TextField
               size="small" label="JW Ingest URL" fullWidth
               value={form.ingest_url || ''} onChange={e => set('ingest_url', e.target.value)}
