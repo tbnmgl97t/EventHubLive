@@ -128,12 +128,16 @@ export default function EncoderForm({ token, tenantId, mode }) {
           setIngestLookupError('JW returned no ingest details for this channel — enter them manually below.')
           return
         }
+        // Pull formats (hls_pull, srt_pull) have no stream key at all — JW pulls
+        // from a source URL rather than accepting a pushed key — so a resolved
+        // pull format should clear any stale key rather than leave it sitting there.
+        const isPullFormat = data.ingest_format?.endsWith('_pull')
         setForm(prev => {
           if (prev.channel_id !== channelId) return prev // user picked a different channel while this was in flight
           return {
             ...prev,
             ingest_url:    data.ingest_url    || prev.ingest_url,
-            stream_key:    data.ingest_key    || prev.stream_key,
+            stream_key:    data.ingest_key || (isPullFormat ? '' : prev.stream_key),
             ingest_format: data.ingest_format || prev.ingest_format,
           }
         })

@@ -1,9 +1,12 @@
 import { resolveTenantSession, getTenantJwCreds } from './_utils/tenant.js'
 import { supabase }    from './_utils/supabase.js'
 
-// Same set EncoderForm.jsx offers for "Ingest Format" — checked in order,
-// preferring whichever format the stream actually reports first.
-const INGEST_FORMATS = ['rtmp', 'rtmps', 'srt', 'srt_pull', 'hls', 'hls_pull', 'rtp', 'rtp_fec']
+// Push formats (rtmp, srt, ...) nest credentials under `ingest_point.{url,key}`.
+// Pull formats (hls_pull, srt_pull, ...) have no key — JW pulls *from* a source
+// URL nested under `source_url.{url}` instead of accepting a push.
+function extractIngestPoint(fmtMeta) {
+  return fmtMeta?.ingest_point || fmtMeta?.source_url || null
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).end()
@@ -67,11 +70,14 @@ export default async function handler(req, res) {
       // whatever format the stream was actually provisioned with — not just rtmp.
       const ingestMeta       = ch.metadata?.ingest || {}
       const preferredFormat  = ch.ingest_format || ch.metadata?.ingest_format
+      // Check whatever formats JW actually sent back (not a fixed whitelist) —
+      // e.g. zixi_push shows up on some streams and isn't one we've special-cased.
+      const availableFormats = Object.keys(ingestMeta)
       const orderedFormats   = preferredFormat
-        ? [preferredFormat, ...INGEST_FORMATS.filter(f => f !== preferredFormat)]
-        : INGEST_FORMATS
+        ? [preferredFormat, ...availableFormats.filter(f => f !== preferredFormat)]
+        : availableFormats
       const ingestPoint = orderedFormats
-        .map(fmt => ingestMeta[fmt]?.ingest_point)
+        .map(fmt => extractIngestPoint(ingestMeta[fmt]))
         .find(point => point?.url || point?.key) || null
       const ingestPointId = ch.relationships?.ingest_point?.id || null
       // Derive display status from metadata.status + playout.availability
