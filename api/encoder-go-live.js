@@ -102,5 +102,5 @@ export default async function handler(req, res) {
   }))
 
   const anyFailed = Object.values(results).some(r => !r.success)
-  return res.status(200).json({ ok: true, results, any_failed: anyFailed })
+  return res.status(200).json({ ok: true, results, any_failed: anyFailed, started_by: session.email || null })
 }

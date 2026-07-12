@@ -58,7 +58,7 @@ export default async function handler(req, res) {
   if (!session.tenantId || !session.tenantRole) return res.status(403).json({ error: 'Not a member of this tenant' })
   if (!canWrite(session)) return res.status(403).json({ error: 'Forbidden' })
 
-  const { encoder_id, started_at, ended_at, destinations, title } = req.body || {}
+  const { encoder_id, started_at, ended_at, destinations, title, started_by } = req.body || {}
   if (!encoder_id) return res.status(400).json({ error: 'encoder_id is required' })
 
   const activeDests = Array.isArray(destinations) ? destinations : []
@@ -73,7 +73,7 @@ export default async function handler(req, res) {
 
   const { data: tenant } = await supabase
     .from('tenants')
-    .select('brightspot_cms_url, brightspot_site_url, brightspot_api_key, youtube_refresh_token, facebook_page_access_token, facebook_page_id, facebook_page_name')
+    .select('timezone, brightspot_cms_url, brightspot_site_url, brightspot_api_key, youtube_refresh_token, facebook_page_access_token, facebook_page_id, facebook_page_name')
     .eq('id', session.tenantId)
     .single()
 
@@ -91,13 +91,34 @@ export default async function handler(req, res) {
     }
   }))
 
-  // ── 2. Trigger JW clip ────────────────────────────────────────────────────
+  // ── 2. Trigger clip creation ──────────────────────────────────────────────
   const jw = await getTenantJwCreds(session.tenantId)
   const clipDate = new Date(ended_at || Date.now())
   const clipTitle = title || `${encoder.name} — ${clipDate.toLocaleString()}`
 
-  let jwClipId  = null
-  let clipError = null
+  // Generic broadcast context — not tied to any one clipping provider — sent
+  // as custom metadata on the created asset and also stored on our own row.
+  const tz = tenant?.timezone || 'America/New_York'
+  const startedDate = started_at ? new Date(started_at) : null
+  const endedDate    = ended_at   ? new Date(ended_at)   : null
+  const fmtTzDateTime = d => d ? d.toLocaleString('en-US', {
+    timeZone: tz, timeZoneName: 'short',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }) : null
+  const customParams = {
+    encoder:     encoder.name,
+    date:        startedDate ? startedDate.toLocaleDateString('en-CA', { timeZone: tz }) : null,
+    startTime:   fmtTzDateTime(startedDate),
+    endTime:     fmtTzDateTime(endedDate),
+    userStart:   started_by || null,
+    userEnd:     session.email || null,
+    destination: activeDests.join(', '),
+  }
+
+  let providerAssetId = null
+  let assetUrl         = null
+  let clipError        = null
 
   if (!jw) {
     clipError = 'JW Player is not configured for this tenant yet'
@@ -119,6 +140,7 @@ export default async function handler(req, res) {
           trim_out_point: ended_at,
           description:    `Broadcast by ${encoder.name}. Destinations: ${activeDests.join(', ') || 'none'}. Recorded ${clipDate.toLocaleDateString()}.`,
           tags:           ['live-broadcast', encoder.name, clipDate.toISOString().slice(0, 10)],
+          metadata:       customParams,
         }),
       })
       const text = await r.text()
@@ -129,7 +151,9 @@ export default async function handler(req, res) {
       } else {
         const data = text ? JSON.parse(text) : {}
         // JW's response is { media_id, legacy_id } — not { id }.
-        jwClipId = data.media_id || data.id || null
+        providerAssetId = data.media_id || data.id || null
+        // Documented JW Delivery API manifest URL — the direct link to the asset.
+        assetUrl = providerAssetId ? `https://cdn.jwplayer.com/manifests/${providerAssetId}.m3u8` : null
       }
     } catch (err) {
       clipError = err.message
@@ -139,6 +163,8 @@ export default async function handler(req, res) {
   if (clipError) console.error('[encoder-stop] Clipping failed:', clipError)
 
   // ── 3. Save broadcast_history ─────────────────────────────────────────────
+  // provider/asset_id/asset_url/started_by/ended_by are intentionally generic —
+  // this isn't JW-only long-term, other clipping/CDN integrations may follow.
   const { data: historyRow, error: historyError } = await supabase
     .from('broadcast_history')
     .insert({
@@ -148,13 +174,14 @@ export default async function handler(req, res) {
       started_at: started_at || null,
       ended_at:   ended_at   || null,
       destinations: activeDests,
-      jw_clip_id: jwClipId,
-      clip_title: jwClipId ? clipTitle : null,
+      provider:   'jwplayer',
+      asset_id:   providerAssetId,
+      asset_url:  assetUrl,
+      started_by: started_by || null,
+      ended_by:   session.email || null,
+      clip_title: providerAssetId ? clipTitle : null,
       clip_metadata: {
-        encoder_name: encoder.name,
-        destinations: activeDests,
-        started_at:   started_at || null,
-        ended_at:     ended_at   || null,
+        ...customParams,
         ...(clipError ? { clip_error: clipError } : {}),
       },
     })
@@ -168,7 +195,8 @@ export default async function handler(req, res) {
     ok: true,
     results,
     any_failed: anyFailed,
-    jw_clip_id: jwClipId,
+    asset_id: providerAssetId,
+    asset_url: assetUrl,
     clip_error: clipError,
     history: historyRow || null,
   })

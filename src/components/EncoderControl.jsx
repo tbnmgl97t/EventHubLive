@@ -285,8 +285,16 @@ function BroadcastHistoryTable({ history, loading }) {
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.8rem', color: AP.text }}>{row.title || '—'}</TableCell>
                     <TableCell>
-                      {row.jw_clip_id ? (
-                        <Chip label="Ready" size="small" sx={{ height: 19, fontSize: '0.63rem', fontWeight: 700, bgcolor: 'rgba(16,185,129,0.15)', color: AP.live }} />
+                      {row.asset_id ? (
+                        row.asset_url ? (
+                          <Chip
+                            component="a" href={row.asset_url} target="_blank" rel="noreferrer" clickable
+                            label="Ready ↗" size="small"
+                            sx={{ height: 19, fontSize: '0.63rem', fontWeight: 700, bgcolor: 'rgba(16,185,129,0.15)', color: AP.live, textDecoration: 'none', '&:hover': { bgcolor: 'rgba(16,185,129,0.25)' } }}
+                          />
+                        ) : (
+                          <Chip label="Ready" size="small" sx={{ height: 19, fontSize: '0.63rem', fontWeight: 700, bgcolor: 'rgba(16,185,129,0.15)', color: AP.live }} />
+                        )
                       ) : (
                         <Typography sx={{ fontSize: '0.75rem', color: AP.muted, fontStyle: 'italic' }}>Pending clip…</Typography>
                       )}
@@ -322,6 +330,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
   const [liveStartedAt, setLiveStartedAt]   = useState(null)
   const [lastBroadcast, setLastBroadcast]   = useState(null)
   const [broadcastTitle, setBroadcastTitle] = useState('')
+  const [startedByEmail, setStartedByEmail] = useState(null) // who went live — echoed from the go-live response
   const [credentialsOpen, setCredentialsOpen] = useState(false)
   const [confirmStopOpen, setConfirmStopOpen] = useState(false)
 
@@ -429,6 +438,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
 
       setGoLiveResults(data.results || null)
       if (data.results?.youtube?.success) setYoutubePrivacyStatus('public')
+      setStartedByEmail(data.started_by || null)
       setLiveStartedAt(Date.now())
       setBroadcastState('live')
     } catch (err) {
@@ -456,6 +466,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
           ended_at:   new Date(endedAt).toISOString(),
           destinations: activeDests,
           title,
+          started_by: startedByEmail,
         }),
       })
       const data = await res.json().catch(() => ({}))
@@ -470,6 +481,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     setGoLiveResults(null)
     setBroadcastState('preview')
     setBroadcastTitle('') // clear — the next broadcast must be named again before going live
+    setStartedByEmail(null)
     setTimeout(fetchHistory, 3000)
   }
 
