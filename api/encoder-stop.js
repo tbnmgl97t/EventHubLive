@@ -114,11 +114,11 @@ export default async function handler(req, res) {
           Accept:         'application/json',
         },
         body: JSON.stringify({
-          title:       clipTitle,
-          start_time:  started_at,
-          end_time:    ended_at,
-          description: `Broadcast by ${encoder.name}. Destinations: ${activeDests.join(', ') || 'none'}. Recorded ${clipDate.toLocaleDateString()}.`,
-          tags:        ['live-broadcast', encoder.name, clipDate.toISOString().slice(0, 10)],
+          title:          clipTitle,
+          trim_in_point:  started_at,
+          trim_out_point: ended_at,
+          description:    `Broadcast by ${encoder.name}. Destinations: ${activeDests.join(', ') || 'none'}. Recorded ${clipDate.toLocaleDateString()}.`,
+          tags:           ['live-broadcast', encoder.name, clipDate.toISOString().slice(0, 10)],
         }),
       })
       const text = await r.text()
@@ -128,7 +128,8 @@ export default async function handler(req, res) {
         clipError = `JW clip API error ${r.status}: ${text}`
       } else {
         const data = text ? JSON.parse(text) : {}
-        jwClipId = data.id || null
+        // JW's response is { media_id, legacy_id } — not { id }.
+        jwClipId = data.media_id || data.id || null
       }
     } catch (err) {
       clipError = err.message
