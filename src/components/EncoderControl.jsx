@@ -330,6 +330,8 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
 
   const [youtubePrivacyStatus, setYoutubePrivacyStatus] = useState(null)
 
+  const [liveIngest, setLiveIngest] = useState(null) // fresh { ingest_url, ingest_key, ingest_format } from JW
+
   const elapsed = useElapsedSeconds(liveStartedAt, broadcastState === 'live')
 
   const fetchEncoder = useCallback(() => {
@@ -380,6 +382,17 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
       .then(data => { if (data?.privacyStatus) setYoutubePrivacyStatus(data.privacyStatus) })
       .catch(() => {})
   }, [token, tenantId, encoder?.youtube_broadcast_id])
+
+  // The saved encoder row can go stale (only updates when someone re-saves the
+  // encoder form) — fetch the channel's live ingest details from JW directly
+  // so credentials shown here always reflect current reality.
+  useEffect(() => {
+    if (!token || !encoder?.channel_id) return
+    fetch(`/api/stream-ingest?id=${encodeURIComponent(encoder.channel_id)}`, { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setLiveIngest(data) })
+      .catch(() => {})
+  }, [token, tenantId, encoder?.channel_id])
 
   // Seed destination defaults from the encoder's configured simulcast targets, once loaded.
   useEffect(() => {
@@ -470,6 +483,12 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
 
   const mediaId   = encoder?.channel_id
   const embedUrl  = mediaId ? `https://cdn.jwplayer.com/players/${mediaId}-${JW_PLAYER_ID}.html?autostart=true&mute=true` : null
+
+  // Prefer the fresh JW lookup over the saved row — the saved value only updates
+  // when someone re-saves the encoder form, so it drifts stale easily.
+  const effectiveIngestUrl    = liveIngest?.ingest_url    || encoder?.ingest_url    || null
+  const effectiveIngestKey    = liveIngest?.ingest_key    || encoder?.stream_key    || null
+  const effectiveIngestFormat = liveIngest?.ingest_format || encoder?.ingest_format || null
 
   if (encoderLoading) {
     return (
@@ -732,10 +751,10 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
             </Box>
             <Collapse in={credentialsOpen}>
               <Box sx={{ px: 2, pb: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-                <CopyRow label="Ingest URL" value={encoder.ingest_url} />
-                <CopyRow label="Stream Key" value={encoder.stream_key} mask />
+                <CopyRow label="Ingest URL" value={effectiveIngestUrl} />
+                <CopyRow label="Stream Key" value={effectiveIngestKey} mask />
                 <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 0.25 }}>
-                  <Chip label={INGEST_FORMAT_LABELS[encoder.ingest_format] || encoder.ingest_format} size="small"
+                  <Chip label={INGEST_FORMAT_LABELS[effectiveIngestFormat] || effectiveIngestFormat} size="small"
                     sx={{ height: 22, fontSize: '0.68rem', fontWeight: 700, bgcolor: AP.accentDim, color: AP.accent, border: `1px solid ${AP.accentBdr}` }} />
                   <Chip label={encoder.region} size="small"
                     sx={{ height: 22, fontSize: '0.68rem', fontWeight: 700, bgcolor: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }} />
