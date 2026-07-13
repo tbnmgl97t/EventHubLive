@@ -37,10 +37,35 @@ async function readTenant(tenantId = 'default') {
   }
 }
 
+// Fields safe to expose to unauthenticated viewers (this endpoint is public —
+// it backs the branding fetch on the public-facing player page). Everything
+// else on the tenants row (JW/YouTube/Facebook credentials and tokens) must
+// never appear here.
+const PUBLIC_FIELDS = ['id', 'slug', 'title', 'subtitle', 'logo_url', 'timezone', 'colors', 'components']
+
+function toPublicTenant(tenant) {
+  return Object.fromEntries(PUBLIC_FIELDS.map(k => [k, tenant[k]]))
+}
+
 export default async function handler(req, res) {
   if (req.method === 'GET') {
     const tenantId = req.headers['x-tenant-id'] || 'default'
-    return res.status(200).json(await readTenant(tenantId))
+    const tenant = await readTenant(tenantId)
+    const publicTenant = toPublicTenant(tenant)
+
+    // Callers authenticated as this tenant's own admin (or a Super Admin)
+    // additionally get the JW credentials — still never exposed to anonymous
+    // viewers, since this same endpoint backs the public branding fetch.
+    const session = await resolveTenantSession(req)
+    if (session?.tenantId === tenantId && canWrite(session)) {
+      publicTenant.jw_site_id    = tenant.jw_site_id    || null
+      publicTenant.jw_api_secret = tenant.jw_api_secret || null
+      publicTenant.brightspot_cms_url   = tenant.brightspot_cms_url   || null
+      publicTenant.brightspot_site_url  = tenant.brightspot_site_url  || null
+      publicTenant.brightspot_api_key   = tenant.brightspot_api_key   || null
+    }
+
+    return res.status(200).json(publicTenant)
   }
 
   if (req.method === 'PUT') {
