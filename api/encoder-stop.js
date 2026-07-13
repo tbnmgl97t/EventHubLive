@@ -115,6 +115,11 @@ export default async function handler(req, res) {
     userEnd:     session.email || null,
     destination: activeDests.join(', '),
   }
+  // JW's custom_params requires string values only — drop anything null/undefined
+  // rather than send a value type it'll reject.
+  const customParamsForJw = Object.fromEntries(
+    Object.entries(customParams).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])
+  )
 
   let providerAssetId = null
   let assetUrl         = null
@@ -135,12 +140,17 @@ export default async function handler(req, res) {
           Accept:         'application/json',
         },
         body: JSON.stringify({
-          title:          clipTitle,
+          title:          clipTitle, // deprecated top-level field, but still required by the API
           trim_in_point:  started_at,
           trim_out_point: ended_at,
-          description:    `Broadcast by ${encoder.name}. Destinations: ${activeDests.join(', ') || 'none'}. Recorded ${clipDate.toLocaleDateString()}.`,
-          tags:           ['live-broadcast', encoder.name, clipDate.toISOString().slice(0, 10)],
-          metadata:       customParams,
+          // title/description/tags/custom_params only take effect nested under
+          // metadata — the top-level fields above don't set the visible asset title.
+          metadata: {
+            title:         clipTitle,
+            description:   `Broadcast by ${encoder.name}. Destinations: ${activeDests.join(', ') || 'none'}. Recorded ${clipDate.toLocaleDateString()}.`,
+            tags:          ['live-broadcast', encoder.name, clipDate.toISOString().slice(0, 10)],
+            custom_params: customParamsForJw,
+          },
         }),
       })
       const text = await r.text()
@@ -152,8 +162,8 @@ export default async function handler(req, res) {
         const data = text ? JSON.parse(text) : {}
         // JW's response is { media_id, legacy_id } — not { id }.
         providerAssetId = data.media_id || data.id || null
-        // Documented JW Delivery API manifest URL — the direct link to the asset.
-        assetUrl = providerAssetId ? `https://cdn.jwplayer.com/manifests/${providerAssetId}.m3u8` : null
+        // Link to the asset's management page in the JW dashboard.
+        assetUrl = providerAssetId ? `https://dashboard.jwplayer.com/p/${jw.siteId}/media/${providerAssetId}` : null
       }
     } catch (err) {
       clipError = err.message

@@ -17,6 +17,8 @@ import ExpandMoreIcon       from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon       from '@mui/icons-material/ExpandLess'
 import SignalCellularAltIcon from '@mui/icons-material/SignalCellularAlt'
 import MovieFilterIcon      from '@mui/icons-material/MovieFilter'
+import PlayArrowIcon        from '@mui/icons-material/PlayArrow'
+import AccessTimeIcon       from '@mui/icons-material/AccessTime'
 
 const JW_PLAYER_ID = 'Sx2qhN0M'
 
@@ -51,6 +53,8 @@ const INGEST_FORMAT_LABELS = {
 }
 
 const DEST_LABELS = { website: 'Website', youtube: 'YouTube', facebook: 'Facebook', app: 'App' }
+// Same per-destination brand colors already used on the Destinations toggle panel.
+const DEST_COLORS = { website: AP.live, youtube: '#ff0000', facebook: '#1877F2', app: AP.accent }
 
 function authHeader(token, tenantId) {
   return {
@@ -230,6 +234,27 @@ function GoLiveResultsPanel({ results }) {
   )
 }
 
+// ── Compact copyable ID for table cells ──
+function CopyableId({ value }) {
+  const [copied, setCopied] = useState(false)
+  if (!value) return <Typography sx={{ fontSize: '0.75rem', color: 'rgba(148,163,184,0.4)' }}>—</Typography>
+  function handleCopy() {
+    navigator.clipboard.writeText(value)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1800)
+  }
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+      <Typography sx={{ fontSize: '0.75rem', color: AP.text, fontFamily: "'SF Mono','Fira Code',monospace" }}>{value}</Typography>
+      <Tooltip title={copied ? 'Copied!' : 'Copy'}>
+        <IconButton size="small" onClick={handleCopy} sx={{ color: copied ? AP.live : AP.muted, p: 0.25 }}>
+          {copied ? <CheckIcon sx={{ fontSize: 13 }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
+        </IconButton>
+      </Tooltip>
+    </Box>
+  )
+}
+
 // ── Broadcast history table ──
 function BroadcastHistoryTable({ history, loading }) {
   return (
@@ -260,6 +285,7 @@ function BroadcastHistoryTable({ history, loading }) {
                 <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Duration</TableCell>
                 <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Destinations</TableCell>
                 <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Title</TableCell>
+                <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Media ID</TableCell>
                 <TableCell sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.muted, textTransform: 'uppercase' }}>Clip</TableCell>
               </TableRow>
             </TableHead>
@@ -271,19 +297,47 @@ function BroadcastHistoryTable({ history, loading }) {
                 const dests = Array.isArray(row.destinations) ? row.destinations : []
                 return (
                   <TableRow key={row.id} sx={{ '& td': { borderColor: 'rgba(255,255,255,0.06)' } }}>
-                    <TableCell sx={{ fontSize: '0.8rem', color: AP.text }}>{formatDateTime(row.started_at)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem', color: AP.text }}>{formatDurationShort(durationSec)}</TableCell>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                        <PlayArrowIcon sx={{ fontSize: 13, color: AP.muted, flexShrink: 0 }} />
+                        <Typography sx={{ fontSize: '0.8rem', color: AP.text }}>{formatDateTime(row.started_at)}</Typography>
+                      </Box>
+                      {row.ended_at && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mt: 0.25 }}>
+                          <StopIcon sx={{ fontSize: 11, color: AP.muted, flexShrink: 0 }} />
+                          <Typography sx={{ fontSize: '0.8rem', color: AP.text }}>{formatDateTime(row.ended_at)}</Typography>
+                        </Box>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                        <AccessTimeIcon sx={{ fontSize: 13, color: AP.muted, flexShrink: 0 }} />
+                        <Typography sx={{ fontSize: '0.8rem', color: AP.text }}>{formatDurationShort(durationSec)}</Typography>
+                      </Box>
+                    </TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
                         {dests.length === 0
                           ? <Typography sx={{ fontSize: '0.72rem', color: 'rgba(148,163,184,0.4)' }}>—</Typography>
-                          : dests.map(d => (
-                            <Chip key={d} label={DEST_LABELS[d] || d} size="small"
-                              sx={{ height: 19, fontSize: '0.63rem', fontWeight: 600, bgcolor: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }} />
-                          ))}
+                          : dests.map(d => {
+                            const color = DEST_COLORS[d] || AP.muted
+                            return (
+                              <Chip
+                                key={d}
+                                icon={d === 'youtube' ? <PlayArrowIcon sx={{ fontSize: '11px !important', color: `${color} !important` }} /> : undefined}
+                                label={DEST_LABELS[d] || d} size="small"
+                                sx={{
+                                  height: 19, fontSize: '0.63rem', fontWeight: 700,
+                                  bgcolor: `${color}1f`, color, border: `1px solid ${color}55`,
+                                  '& .MuiChip-icon': { ml: '5px' },
+                                }}
+                              />
+                            )
+                          })}
                       </Box>
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.8rem', color: AP.text }}>{row.title || '—'}</TableCell>
+                    <TableCell><CopyableId value={row.asset_id} /></TableCell>
                     <TableCell>
                       {row.asset_id ? (
                         row.asset_url ? (
@@ -455,6 +509,9 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     const endedAt = Date.now()
     const activeDests = Object.entries(destinations).filter(([, v]) => v).map(([k]) => k)
     const title = broadcastTitle.trim()
+    // The clip is created synchronously inside /api/encoder-stop, so its outcome
+    // is already known by the time this request resolves — no need to guess.
+    let clipResult = { assetUrl: null, assetId: null, clipError: null }
 
     try {
       const res = await fetch('/api/encoder-stop', {
@@ -472,11 +529,12 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to stop broadcast')
       if (data.results?.youtube?.success) setYoutubePrivacyStatus('unlisted')
+      clipResult = { assetUrl: data.asset_url || null, assetId: data.asset_id || null, clipError: data.clip_error || null }
     } catch (err) {
       setGoLiveError(err.message)
     }
 
-    setLastBroadcast({ startedAt, endedAt, destinations: activeDests, title, clipping: true })
+    setLastBroadcast({ startedAt, endedAt, destinations: activeDests, title, ...clipResult })
     setLiveStartedAt(null)
     setGoLiveResults(null)
     setBroadcastState('preview')
@@ -737,9 +795,21 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
                       </Box>
                     </Box>
                     {!isLiveNow && lastBroadcast && (
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <Typography sx={{ fontSize: '0.78rem', color: AP.muted }}>Clip status</Typography>
-                        <Typography sx={{ fontSize: '0.78rem', color: AP.muted, fontStyle: 'italic' }}>Clipping in progress…</Typography>
+                        {lastBroadcast.assetUrl ? (
+                          <Chip
+                            component="a" href={lastBroadcast.assetUrl} target="_blank" rel="noreferrer" clickable
+                            label="Ready ↗" size="small"
+                            sx={{ height: 20, fontSize: '0.65rem', fontWeight: 700, bgcolor: 'rgba(16,185,129,0.15)', color: AP.live, textDecoration: 'none', '&:hover': { bgcolor: 'rgba(16,185,129,0.25)' } }}
+                          />
+                        ) : lastBroadcast.clipError ? (
+                          <Tooltip title={lastBroadcast.clipError}>
+                            <Typography sx={{ fontSize: '0.78rem', color: AP.danger }}>Failed</Typography>
+                          </Tooltip>
+                        ) : (
+                          <Typography sx={{ fontSize: '0.78rem', color: AP.muted, fontStyle: 'italic' }}>Not available</Typography>
+                        )}
                       </Box>
                     )}
                   </>
