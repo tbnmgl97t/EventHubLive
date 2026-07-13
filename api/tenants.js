@@ -1,5 +1,17 @@
+import { randomInt } from 'crypto'
 import { verifyToken, isSuperAdmin } from './_utils/auth.js'
 import { supabase } from './_utils/supabase.js'
+
+// Random 8-char mixed-case alphanumeric ID, matching the style of JW Player's
+// own Property IDs (e.g. "Yal8cmyO") — opaque, not derived from user input.
+const ID_CHARS  = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+const ID_LENGTH = 8
+
+function generateTenantId() {
+  let id = ''
+  for (let i = 0; i < ID_LENGTH; i++) id += ID_CHARS[randomInt(ID_CHARS.length)]
+  return id
+}
 
 // Super Admin only — create/list/update client organizations.
 export default async function handler(req, res) {
@@ -27,21 +39,26 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     const { name, slug, timezone, jwSiteId, jwApiSecret } = req.body || {}
-    if (!name?.trim() || !slug?.trim()) return res.status(400).json({ error: 'name and slug are required' })
+    if (!name?.trim()) return res.status(400).json({ error: 'name is required' })
 
-    const id = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-')
-    const { data, error } = await supabase
-      .from('tenants')
-      .insert({
-        id,
-        slug: id,
-        title: name.trim(),
-        timezone: timezone || 'America/New_York',
-        jw_site_id: jwSiteId?.trim() || null,
-        jw_api_secret: jwApiSecret?.trim() || null,
-      })
-      .select()
-      .single()
+    let data, error
+    for (let attempt = 0; attempt < 5; attempt++) {
+      ;({ data, error } = await supabase
+        .from('tenants')
+        .insert({
+          id: generateTenantId(),
+          slug: slug?.trim() || null,
+          title: name.trim(),
+          timezone: timezone || 'America/New_York',
+          jw_site_id: jwSiteId?.trim() || null,
+          jw_api_secret: jwApiSecret?.trim() || null,
+        })
+        .select()
+        .single())
+      // Retry only on an id collision (astronomically rare); any other
+      // error (e.g. a duplicate slug) is a real validation failure.
+      if (!error || error.code !== '23505' || error.message.includes('slug')) break
+    }
     if (error) return res.status(400).json({ error: error.message })
     return res.status(201).json({ tenant: { id: data.id, slug: data.slug, name: data.title } })
   }
