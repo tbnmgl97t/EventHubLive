@@ -33,7 +33,7 @@ async function makeYouTubePrivate(tenant, encoder) {
 
   await youtubeRequest(tenant.youtube_refresh_token, '/liveBroadcasts?part=status', {
     method: 'PUT',
-    body: { id: encoder.youtube_broadcast_id, status: { privacyStatus: 'unlisted' } },
+    body: { id: encoder.youtube_broadcast_id, status: { privacyStatus: 'private' } },
   })
   return { success: true }
 }

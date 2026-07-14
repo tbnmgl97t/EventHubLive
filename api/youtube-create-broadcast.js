@@ -3,8 +3,9 @@
  * Body: { title, description, channel_id }
  *
  * Creates a persistent (always-on) YouTube Live broadcast bound to a fresh
- * ingest stream, for simulcasting a 24/7 JW channel. Starts private/unlisted
- * — encoder-go-live.js / encoder-stop.js flip its privacyStatus afterward.
+ * ingest stream, for simulcasting a 24/7 JW channel. Starts private —
+ * encoder-go-live.js flips it to public when going live, encoder-stop.js
+ * flips it back to private when stopping.
  * channel_id is accepted for traceability only (the JW channel it's linked
  * to); it isn't sent to YouTube.
  */
@@ -39,18 +40,20 @@ export default async function handler(req, res) {
 
   let broadcast, stream
   try {
-    // Far-future scheduledStartTime + enableAutoStart makes this effectively
-    // a persistent/always-on broadcast rather than a one-off scheduled event.
+    // scheduledStartTime must be near-now — YouTube rejects far-future
+    // sentinel dates with invalidScheduledStartTime. Omitting scheduledEndTime
+    // (never set here) is what makes the broadcast run indefinitely, combined
+    // with enableAutoStop: false below.
     broadcast = await youtubeRequest(refreshToken, '/liveBroadcasts?part=snippet,status,contentDetails', {
       method: 'POST',
       body: {
         snippet: {
           title: title.trim(),
           description,
-          scheduledStartTime: '2030-01-01T00:00:00Z',
+          scheduledStartTime: new Date(Date.now() + 5 * 60 * 1000).toISOString().replace(/\.\d+Z$/, 'Z'),
         },
         status: {
-          privacyStatus: 'unlisted',
+          privacyStatus: 'private',
         },
         contentDetails: {
           enableAutoStart: true,

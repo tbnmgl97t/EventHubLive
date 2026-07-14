@@ -103,6 +103,7 @@ export default async function handler(req, res) {
         name:             ch.metadata?.title || ch.id,
         status:           derivedStatus,
         stream_type:      ch.stream_type || null,
+        clipping_window:  ch.clipping_window_display_name || ch.clipping_window || ch.options?.clipping_window || ch.metadata?.clipping_window || null,
         stream_url:       ch.metadata?.playout?.hls || null,
         stream_start:     ch.metadata?.stream_start || null,
         stream_end:       ch.metadata?.stream_end   || null,

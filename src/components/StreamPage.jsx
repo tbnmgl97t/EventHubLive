@@ -1312,12 +1312,13 @@ export default function StreamPage() {
               {/* ── Stream info ── */}
               <Box sx={{ bgcolor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 2, p: 2 }}>
                 <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, rowGap: 1.75, columnGap: 4 }}>
-                  <Box sx={{ gridColumn: '1 / -1' }}>
-                    <InfoRow label="Stream ID" value={channel.id} mono />
-                  </Box>
+                  <InfoRow label="Stream ID" value={channel.id} mono />
                   <InfoRow label="Type"      value={channel.stream_type === '24/7' ? '24/7 Channel' : 'Live Event'} />
-                  <InfoRow label="Format"    value={fmt?.label || channel.ingest_format?.toUpperCase()} />
+                  {channel.stream_type === '24/7' && (
+                    <InfoRow label="Clipping Window" value={channel.clipping_window} />
+                  )}
                   {channel.stream_type !== '24/7' && <InfoRow label="Warm-up" value="15 min" />}
+                  <InfoRow label="Format"    value={fmt?.label || channel.ingest_format?.toUpperCase()} />
                   {channel.ingest_point_name && (
                     <Box sx={{ gridColumn: '1 / -1' }}>
                       <InfoRow label="Ingest Point" value={channel.ingest_point_name} />
