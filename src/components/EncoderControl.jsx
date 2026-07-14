@@ -15,10 +15,12 @@ import VisibilityIcon       from '@mui/icons-material/Visibility'
 import VisibilityOffIcon    from '@mui/icons-material/VisibilityOff'
 import ExpandMoreIcon       from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon       from '@mui/icons-material/ExpandLess'
-import SignalCellularAltIcon from '@mui/icons-material/SignalCellularAlt'
 import MovieFilterIcon      from '@mui/icons-material/MovieFilter'
 import PlayArrowIcon        from '@mui/icons-material/PlayArrow'
 import AccessTimeIcon       from '@mui/icons-material/AccessTime'
+import { getStatusDisplay } from '../lib/streamStatus'
+import ChannelStateAnimation from './ChannelStateAnimation'
+import FeedCard, { YoutubePrivacyBadge, LiveStateBadge } from './FeedCard'
 
 const JW_PLAYER_ID = 'Sx2qhN0M'
 
@@ -102,8 +104,11 @@ function useElapsedSeconds(startedAtMs, active) {
 }
 
 // ── Status badge ──
-function StatusBadge({ broadcastState }) {
-  const cfg = STATE_CFG[broadcastState] || STATE_CFG.offline
+// `override` takes priority when the underlying 24/7 channel itself is
+// stopping/destroying/deleting — the local broadcast-to-destinations state
+// (preview/live/etc.) doesn't matter if the channel is being torn down.
+function StatusBadge({ broadcastState, override }) {
+  const cfg = override || STATE_CFG[broadcastState] || STATE_CFG.offline
   return (
     <Box sx={{
       display: 'flex', alignItems: 'center', gap: 0.75,
@@ -457,17 +462,63 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
       .catch(() => {})
   }, [token, tenantId, encoder?.channel_id])
 
-  // Seed destination defaults from the encoder's configured simulcast targets, once loaded.
+  // The underlying 24/7 channel's own lifecycle (active/stopping/destroying/…)
+  // is a separate concept from the local "is this broadcast live to
+  // destinations" state above, and nothing else here ever checked it — so
+  // stopping the channel from elsewhere (e.g. the stream detail page) left
+  // this screen still showing PREVIEW/LIVE as if the channel were healthy.
+  // Poll it independently and let it override the badge/controls when torn down.
+  const [channelStatus, setChannelStatus] = useState(null)
+  useEffect(() => {
+    if (!token || !encoder?.channel_id) return
+    let cancelled = false
+    function checkChannelStatus() {
+      fetch('/api/channels', { headers: authHeader(token, tenantId) })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (cancelled) return
+          const ch = (data?.channels || []).find(c => c.id === encoder.channel_id)
+          setChannelStatus(ch?.status?.toLowerCase() || null)
+        })
+        .catch(() => {})
+    }
+    checkChannelStatus()
+    const interval = setInterval(checkChannelStatus, 15_000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [token, tenantId, encoder?.channel_id])
+
+  // Not ready yet (still spinning up, or created but never started/stopped)
+  // and torn down (winding down) are both states where there's no real feed
+  // to show or broadcast to — treat them the same way the stream detail page
+  // does: no preview, no controls.
+  const channelNotReady    = ['creating', 'starting', 'ready', 'idle', 'stopped'].includes(channelStatus)
+  const channelTornDown    = ['stopping', 'destroying', 'deleting'].includes(channelStatus)
+  const channelUnavailable = channelNotReady || channelTornDown
+  const channelStatusDisplay = channelUnavailable
+    ? getStatusDisplay({ status: channelStatus, stream_type: '24/7' })
+    : null
+  // The actions that resolve every one of these states live on the Live
+  // Streams page (starting a 24/7 channel, waiting out a stop/destroy) — this
+  // screen only controls simulcast destinations, so point there instead of
+  // implying there's something to do here.
+  const channelStateHint =
+    channelStatus === 'ready' ? 'Start the preview from the Live Streams page'
+    : channelStatus === 'idle' || channelStatus === 'stopped' ? 'Start this channel from the Live Streams page'
+    : channelNotReady ? 'Manage this channel from the Live Streams page'
+    : undefined
+
+  // Only Website defaults to on for a new broadcast — being configured for
+  // YouTube/Facebook/App just means the destination is available to toggle,
+  // not that it should go out live by default every time.
   useEffect(() => {
     if (!encoder) return
     setDestinations({
       website:  encoder.simulcast_website ?? true,
-      youtube:  !!(encoder.simulcast_youtube && youtubeConnected),
-      facebook: !!(encoder.simulcast_facebook && facebookConnected),
-      app:      !!encoder.simulcast_app,
+      youtube:  false,
+      facebook: false,
+      app:      false,
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [encoder?.id, youtubeConnected, facebookConnected])
+  }, [encoder?.id])
 
   function toggleDest(key, value) {
     setDestinations(prev => ({ ...prev, [key]: value }))
@@ -528,7 +579,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to stop broadcast')
-      if (data.results?.youtube?.success) setYoutubePrivacyStatus('unlisted')
+      if (data.results?.youtube?.success) setYoutubePrivacyStatus('private')
       clipResult = { assetUrl: data.asset_url || null, assetId: data.asset_id || null, clipError: data.clip_error || null }
     } catch (err) {
       setGoLiveError(err.message)
@@ -549,10 +600,14 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
 
   const anyDestSelected = Object.values(destinations).some(Boolean)
   const hasTitle = broadcastTitle.trim().length > 0
+  // "Locked" (Sending/Off chip) only applies to a genuine live/stopping
+  // broadcast — channelUnavailable disables the toggles separately, without
+  // implying a broadcast is actually sending.
   const destsLocked = broadcastState === 'live' || broadcastState === 'stopping' || broadcastState === 'going_live'
 
   const mediaId   = encoder?.channel_id
   const embedUrl  = mediaId ? `https://cdn.jwplayer.com/players/${mediaId}-${JW_PLAYER_ID}.html?autostart=true&mute=true` : null
+  const showYoutubeFeed = !!(encoder?.simulcast_youtube && encoder?.youtube_broadcast_id)
 
   // Prefer the fresh JW lookup over the saved row — the saved value only updates
   // when someone re-saves the encoder form, so it drifts stale easily.
@@ -603,78 +658,90 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          {broadcastState === 'live' && (
+          {broadcastState === 'live' && !channelUnavailable && (
             <Typography sx={{ fontSize: '1.1rem', fontWeight: 700, color: AP.danger, fontFamily: "'SF Mono','Fira Code',monospace" }}>
               {formatClock(elapsed)}
             </Typography>
           )}
-          <StatusBadge broadcastState={uiState} />
+          <StatusBadge
+            broadcastState={uiState}
+            override={channelUnavailable ? { label: channelStatusDisplay.label.toUpperCase(), color: channelStatusDisplay.color, pulse: channelStatusDisplay.pulse } : null}
+          />
         </Box>
       </Box>
+      {channelUnavailable && (
+        <Alert severity="warning" sx={{ mb: -1 }}>
+          {channelTornDown
+            ? `This channel is ${channelStatusDisplay.label.toLowerCase()} — broadcasting is disabled until it's back up.`
+            : `${channelStateHint} — broadcasting will be available once it's live.`}
+        </Alert>
+      )}
 
       {/* ── Main area — two columns ── */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', lg: 'row' }, gap: 2.5 }}>
 
-        {/* ══ LEFT — Preview monitor (60%) ══ */}
-        <Box sx={{ flex: { lg: '3 1 0' }, minWidth: 0 }}>
+        {/* ══ LEFT — Preview monitors ══ */}
+        <Box sx={{ flex: { lg: 1 }, minWidth: 0 }}>
           <Box sx={{
-            position: 'relative', width: '100%', aspectRatio: '16 / 9',
-            bgcolor: '#000', borderRadius: 2, overflow: 'hidden',
-            border: `1px solid ${broadcastState === 'live' ? AP.dangerBdr : 'rgba(255,255,255,0.08)'}`,
-            boxShadow: broadcastState === 'live' ? `0 0 0 1px ${AP.dangerBdr}, 0 4px 30px -6px rgba(239,68,68,0.35)` : 'none',
+            display: 'grid',
+            gridTemplateColumns: showYoutubeFeed ? { xs: '1fr', md: '1fr 1fr' } : '1fr',
+            gap: 2,
           }}>
-            {embedUrl ? (
-              <Box component="iframe" src={embedUrl} title="Preview monitor"
-                sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
-                allow="autoplay; fullscreen" allowFullScreen scrolling="auto"
-              />
-            ) : (
-              <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.85rem' }}>No 24/7 channel assigned</Typography>
-              </Box>
-            )}
-
-            {/* Top-left status overlay */}
-            <Box sx={{ position: 'absolute', top: 12, left: 12, zIndex: 2 }}>
-              {broadcastState === 'live' ? (
-                <Box sx={{
-                  display: 'flex', alignItems: 'center', gap: 0.6,
-                  bgcolor: 'rgba(239,68,68,0.9)', px: 1.1, py: 0.4, borderRadius: '4px',
-                }}>
-                  <FiberManualRecordIcon sx={{
-                    fontSize: 11, color: '#fff',
-                    animation: 'ecLiveDotPulse 1.2s ease-in-out infinite',
-                    '@keyframes ecLiveDotPulse': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.3 } },
-                  }} />
-                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.08em', color: '#fff' }}>LIVE</Typography>
-                </Box>
+            {/* CDN feed — same FeedCard treatment as the Stream Details page */}
+            <FeedCard
+              label="CDN"
+              accentColor="#57BB95"
+              isLive={broadcastState === 'live' && !channelUnavailable}
+              statusBadge={!channelUnavailable && <LiveStateBadge isLive={broadcastState === 'live'} />}
+            >
+              {channelUnavailable ? (
+                // Matches the stream detail page's animated per-status placeholders —
+                // the channel isn't actually live right now, so don't show a
+                // preview/health readout that would just be stale leftover state.
+                <ChannelStateAnimation status={channelStatus} hint={channelStateHint} />
+              ) : embedUrl ? (
+                <Box component="iframe" src={embedUrl} title="Preview monitor"
+                  sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+                  allow="autoplay; fullscreen" allowFullScreen scrolling="auto"
+                />
               ) : (
-                <Box sx={{
-                  bgcolor: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.15)', backdropFilter: 'blur(4px)',
-                  px: 1.1, py: 0.4, borderRadius: '4px',
-                }}>
-                  <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.75)' }}>
-                    PREVIEW
-                  </Typography>
+                <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.85rem' }}>No 24/7 channel assigned</Typography>
                 </Box>
               )}
-            </Box>
+            </FeedCard>
 
-            {/* Top-right signal quality indicator */}
-            <Box sx={{
-              position: 'absolute', top: 12, right: 12, zIndex: 2,
-              display: 'flex', alignItems: 'center', gap: 0.5,
-              bgcolor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
-              border: '1px solid rgba(255,255,255,0.1)', borderRadius: '20px', px: 1, py: 0.35,
-            }}>
-              <SignalCellularAltIcon sx={{ fontSize: 14, color: AP.live }} />
-              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: AP.live }}>Healthy</Typography>
-            </Box>
+            {/* YouTube feed */}
+            {showYoutubeFeed && (
+              <FeedCard
+                label="YouTube"
+                logo={<Box component="img" src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg" sx={{ width: 16, height: 16 }} />}
+                accentColor="#ff0000"
+                isLive={youtubePrivacyStatus === 'public' && !channelUnavailable}
+                statusBadge={!channelUnavailable && <YoutubePrivacyBadge status={youtubePrivacyStatus} />}
+              >
+                {channelUnavailable ? (
+                  <ChannelStateAnimation status={channelStatus} hint={channelStateHint} />
+                ) : (
+                  <Box component="iframe"
+                    // Forces a fresh iframe (not just a src update on the existing one)
+                    // when the live state flips, so autoplay reliably kicks in — same
+                    // as the Stream Details page, where this box doesn't mount at all
+                    // until the channel is already live.
+                    key={broadcastState === 'live' ? 'live' : 'idle'}
+                    src={`https://www.youtube.com/embed/${encoder.youtube_broadcast_id}?autoplay=${broadcastState === 'live' ? 1 : 0}&mute=1&rel=0&modestbranding=1`}
+                    title="YouTube preview"
+                    sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+                    allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen
+                  />
+                )}
+              </FeedCard>
+            )}
           </Box>
         </Box>
 
-        {/* ══ RIGHT — Controls panel (40%) ══ */}
-        <Box sx={{ flex: { lg: '2 1 0' }, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {/* ══ RIGHT — Controls panel ══ */}
+        <Box sx={{ width: { xs: '100%', lg: 400 }, flexShrink: 0, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
 
           {goLiveError && (
             <Alert severity="error" onClose={() => setGoLiveError('')} sx={{ fontSize: '0.8rem' }}>
@@ -688,17 +755,17 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
               Destinations
             </Typography>
             <DestToggle label="Website (BrightSpot)" color={AP.live} checked={destinations.website}
-              onChange={v => toggleDest('website', v)} disabled={readOnly || destsLocked} locked={destsLocked} />
+              onChange={v => toggleDest('website', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
             {youtubeConnected && (
               <DestToggle label="YouTube" color="#ff0000" checked={destinations.youtube}
-                onChange={v => toggleDest('youtube', v)} disabled={readOnly || destsLocked} locked={destsLocked} />
+                onChange={v => toggleDest('youtube', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
             )}
             {facebookConnected && (
               <DestToggle label="Facebook" color="#1877F2" checked={destinations.facebook}
-                onChange={v => toggleDest('facebook', v)} disabled={readOnly || destsLocked} locked={destsLocked} />
+                onChange={v => toggleDest('facebook', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
             )}
             <DestToggle label="App (MRSS)" color={AP.accent} checked={destinations.app}
-              onChange={v => toggleDest('app', v)} disabled={readOnly || destsLocked} locked={destsLocked} />
+              onChange={v => toggleDest('app', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
           </Box>
 
           {/* Go Live section */}
@@ -724,7 +791,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
             {(broadcastState === 'preview' || broadcastState === 'going_live') && (
               <Button
                 fullWidth variant="contained" startIcon={broadcastState === 'going_live' ? null : <FiberManualRecordIcon />}
-                onClick={handleGoLive} disabled={readOnly || broadcastState === 'going_live' || !anyDestSelected || !hasTitle}
+                onClick={handleGoLive} disabled={readOnly || broadcastState === 'going_live' || !anyDestSelected || !hasTitle || channelUnavailable}
                 sx={{
                   bgcolor: AP.danger, color: '#fff', fontWeight: 800, py: 1.3, minHeight: 48, fontSize: '1rem', letterSpacing: '0.04em',
                   '&:hover': { bgcolor: '#dc2626' }, '&.Mui-disabled': { bgcolor: 'rgba(239,68,68,0.35)', color: 'rgba(255,255,255,0.5)' },
@@ -733,10 +800,10 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
                 {broadcastState === 'going_live' ? (<><CircularProgress size={16} sx={{ color: '#fff', mr: 1 }} /> Going live…</>) : 'GO LIVE'}
               </Button>
             )}
-            {broadcastState === 'preview' && !hasTitle && (
+            {!channelUnavailable && broadcastState === 'preview' && !hasTitle && (
               <Typography sx={{ fontSize: '0.7rem', color: AP.warn, textAlign: 'center' }}>Enter a broadcast title to go live.</Typography>
             )}
-            {broadcastState === 'preview' && hasTitle && !anyDestSelected && (
+            {!channelUnavailable && broadcastState === 'preview' && hasTitle && !anyDestSelected && (
               <Typography sx={{ fontSize: '0.7rem', color: AP.warn, textAlign: 'center' }}>Select at least one destination to go live.</Typography>
             )}
 
