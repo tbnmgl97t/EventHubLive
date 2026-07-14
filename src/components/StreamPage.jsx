@@ -15,6 +15,9 @@ import VpnKeyIcon      from '@mui/icons-material/VpnKey'
 import LocationOnIcon  from '@mui/icons-material/LocationOn'
 import { useTenant }   from '../contexts/TenantContext'
 import VideoPlayer     from './VideoPlayer'
+import { getStatusDisplay } from '../lib/streamStatus'
+import ChannelStateAnimation from './ChannelStateAnimation'
+import FeedCard, { YoutubePrivacyBadge } from './FeedCard'
 
 const SESSION_KEY       = 'ri_admin_token'
 const ACTIVE_TENANT_KEY = 'ri_active_tenant'
@@ -29,20 +32,8 @@ function authHeader(token, tenantId) {
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const STATUS_CFG = {
-  active:     { label: 'Live',       color: '#10b981', bg: 'rgba(16,185,129,0.15)', border: 'rgba(16,185,129,0.35)' },
-  streaming:  { label: 'Live',       color: '#10b981', bg: 'rgba(16,185,129,0.15)', border: 'rgba(16,185,129,0.35)' },
-  requested:  { label: 'Scheduled',  color: '#818cf8', bg: 'rgba(99,102,241,0.15)', border: 'rgba(99,102,241,0.35)' },
-  scheduled:  { label: 'Scheduled',  color: '#818cf8', bg: 'rgba(99,102,241,0.15)', border: 'rgba(99,102,241,0.35)' },
-  creating:   { label: 'Creating',   color: '#f59e0b', bg: 'rgba(245,158,11,0.15)', border: 'rgba(245,158,11,0.35)' },
-  starting:   { label: 'Starting',   color: '#38bdf8', bg: 'rgba(56,189,248,0.12)', border: 'rgba(56,189,248,0.3)'  },
-  ready:      { label: 'Ready',      color: '#57BB95', bg: 'rgba(87,187,149,0.15)', border: 'rgba(87,187,149,0.35)' },
-  preview:    { label: 'Preview',    color: '#38bdf8', bg: 'rgba(56,189,248,0.15)', border: 'rgba(56,189,248,0.35)' },
-  idle:       { label: 'Idle',       color: '#64748b', bg: 'rgba(100,116,139,0.12)', border: 'rgba(100,116,139,0.3)' },
-  stopping:   { label: 'Stopping',   color: '#f87171', bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.3)'  },
-  destroying: { label: 'Destroying', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.3)' },
-  deleting:   { label: 'Deleting',   color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.3)' },
-}
+// Status label/color config lives in src/lib/streamStatus.js (shared with
+// every other view of a channel's status).
 const FORMAT_MAP = {
   rtmp:     { label: 'RTMP',     color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.3)'  },
   rtmps:    { label: 'RTMPS',    color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.3)'  },
@@ -145,52 +136,6 @@ function Countdown({ targetIso, compact = false }) {
   )
 }
 
-// ─── FeedCard ─────────────────────────────────────────────────────────────────
-// A 16:9 feed card with source label, status badge, and inner content
-function FeedCard({ label, logo, accentColor = '#6366f1', isLive, children }) {
-  return (
-    <Box sx={{
-      borderRadius: 2.5,
-      overflow: 'hidden',
-      bgcolor: '#060810',
-      border: `1px solid ${isLive ? `${accentColor}66` : 'rgba(255,255,255,0.14)'}`,
-      boxShadow: isLive
-        ? `0 0 48px ${accentColor}22, 0 4px 32px rgba(0,0,0,0.6)`
-        : '0 2px 20px rgba(0,0,0,0.5)',
-      transition: 'box-shadow 0.5s, border-color 0.5s',
-    }}>
-      {/* Source header bar */}
-      <Box sx={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        px: 1.5, py: 1,
-        bgcolor: 'rgba(255,255,255,0.04)',
-        borderBottom: `1px solid rgba(255,255,255,0.1)`,
-      }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-          {logo}
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase' }}>
-            {label}
-          </Typography>
-        </Box>
-        {isLive && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 0.9, py: 0.25, borderRadius: '20px', bgcolor: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.35)' }}>
-            <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#10b981', boxShadow: '0 0 5px #10b981',
-              animation: 'liveDot 1.8s ease-in-out infinite',
-              '@keyframes liveDot': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.3 } } }} />
-            <Typography sx={{ fontSize: '0.55rem', fontWeight: 700, letterSpacing: '0.1em', color: '#10b981', textTransform: 'uppercase' }}>Live</Typography>
-          </Box>
-        )}
-      </Box>
-
-      {/* 16:9 content area */}
-      <Box sx={{ position: 'relative', width: '100%', paddingTop: '56.25%' }}>
-        <Box sx={{ position: 'absolute', inset: 0 }}>
-          {children}
-        </Box>
-      </Box>
-    </Box>
-  )
-}
 
 
 // ─── CredCard ─────────────────────────────────────────────────────────────────
@@ -640,7 +585,7 @@ export default function StreamPage() {
   // When waiting for a start transition, show the pill as "starting" immediately
   // so there's no gap between clicking and the status actually changing
   const pillStatus  = (s === 'ready' && (waitingForStart || starting)) ? 'starting' : s
-  const statusCfg   = STATUS_CFG[pillStatus] || STATUS_CFG.idle
+  const statusCfg   = getStatusDisplay({ ...channel, status: pillStatus })
   const fmt        = channel.ingest_format
     ? (FORMAT_MAP[channel.ingest_format] || { label: channel.ingest_format.toUpperCase(), color: '#94a3b8', bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.08)' })
     : null
@@ -718,51 +663,7 @@ export default function StreamPage() {
     // Starting state — rings contract inward (CDN connecting), same family as creating/ready
     // Also show when ready→starting transition is in progress (waitingForStart)
     if (s === 'starting' || (s === 'ready' && (waitingForStart || starting))) {
-      return (
-        <Box sx={{
-          position: 'relative',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          height: '100%', overflow: 'hidden',
-          background: 'radial-gradient(ellipse at 50% 50%, rgba(56,189,248,0.1) 0%, transparent 68%)',
-        }}>
-          {/* Rings begin large and collapse inward toward center */}
-          {[1, 2, 3, 4, 5].map(i => (
-            <Box key={i} sx={{
-              position: 'absolute',
-              left: '50%', top: '50%',
-              transform: 'translate(-50%, -50%)',
-              width: `${(6 - i) * 22}%`,
-              aspectRatio: '1',
-              borderRadius: '50%',
-              border: `1.5px solid rgba(56,189,248,${0.75 - (5 - i) * 0.1})`,
-              opacity: 0,
-              animation: `startCollapse 3.2s ease-in ${(i - 1) * 0.55}s infinite`,
-              '@keyframes startCollapse': {
-                '0%':   { transform: 'translate(-50%, -50%) scale(1)',    opacity: 0.85 },
-                '100%': { transform: 'translate(-50%, -50%) scale(0.08)', opacity: 0    },
-              },
-            }} />
-          ))}
-
-          {/* Label — absolutely centered */}
-          <Box sx={{
-            position: 'absolute', zIndex: 1,
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.75,
-          }}>
-            <Typography sx={{
-              fontSize: '1.6rem', fontWeight: 700, letterSpacing: '0.22em',
-              color: '#38bdf8', textTransform: 'uppercase',
-              animation: 'fadeLblBlue 2.2s ease-in-out infinite',
-              '@keyframes fadeLblBlue': { '0%,100%': { opacity: 0.4 }, '50%': { opacity: 1 } },
-            }}>
-              Starting Preview
-            </Typography>
-            <Typography sx={{ fontSize: '0.8rem', color: 'rgba(56,189,248,0.45)', letterSpacing: '0.08em' }}>
-              CDN warming up…
-            </Typography>
-          </Box>
-        </Box>
-      )
+      return <ChannelStateAnimation status="starting" />
     }
 
     // Preview state — stream is playing but not yet public
@@ -793,150 +694,21 @@ export default function StreamPage() {
           </Box>
         )
       }
-      return (
-        <Box sx={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          height: '100%', gap: 2,
-          background: 'radial-gradient(ellipse at 50% 55%, rgba(56,189,248,0.07) 0%, transparent 65%)',
-        }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-            {[0, 1, 2].map(i => (
-              <Box key={i} sx={{
-                width: 10, height: 10, borderRadius: '50%',
-                bgcolor: '#38bdf8',
-                animation: `previewDot 1.4s ease-in-out ${i * 0.22}s infinite`,
-                '@keyframes previewDot': {
-                  '0%,100%': { transform: 'scale(0.55)', opacity: 0.3 },
-                  '50%':     { transform: 'scale(1)',    opacity: 1 },
-                },
-              }} />
-            ))}
-          </Box>
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.4 }}>
-            <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.18em', color: '#38bdf8', textTransform: 'uppercase' }}>
-              Preview
-            </Typography>
-            <Typography sx={{ fontSize: '0.62rem', color: 'rgba(56,189,248,0.55)', letterSpacing: '0.06em' }}>
-              CDN propagating…
-            </Typography>
-          </Box>
-        </Box>
-      )
+      return <ChannelStateAnimation status="preview" />
     }
 
     // Ready state — large green sonar rings expanding to fill the frame
     if (s === 'ready') {
-      return (
-        <Box sx={{
-          position: 'relative',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          height: '100%', overflow: 'hidden',
-          background: 'radial-gradient(ellipse at 50% 50%, rgba(87,187,149,0.12) 0%, transparent 68%)',
-        }}>
-          {/* Sonar rings — expand to fill/overflow the frame */}
-          {[1, 2, 3, 4, 5].map(i => (
-            <Box key={i} sx={{
-              position: 'absolute',
-              left: '50%', top: '50%',
-              transform: 'translate(-50%, -50%)',
-              width: `${i * 22}%`,
-              aspectRatio: '1',
-              borderRadius: '50%',
-              border: `1.5px solid rgba(87,187,149,${0.8 - i * 0.1})`,
-              opacity: 0,
-              animation: `readySonar 3.2s ease-out ${(i - 1) * 0.55}s infinite`,
-              '@keyframes readySonar': {
-                '0%':   { transform: 'translate(-50%, -50%) scale(0.1)', opacity: 0.95 },
-                '100%': { transform: 'translate(-50%, -50%) scale(1)',   opacity: 0 },
-              },
-            }} />
-          ))}
-
-          {/* Label — absolutely centered over the rings */}
-          <Box sx={{
-            position: 'absolute', zIndex: 1,
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.75,
-          }}>
-            <Typography sx={{
-              fontSize: '1.6rem', fontWeight: 700, letterSpacing: '0.22em',
-              color: '#57BB95', textTransform: 'uppercase',
-              animation: 'fadeLblGreen 2.2s ease-in-out infinite',
-              '@keyframes fadeLblGreen': { '0%,100%': { opacity: 0.4 }, '50%': { opacity: 1 } },
-            }}>
-              Ready
-            </Typography>
-            <Typography sx={{ fontSize: '0.8rem', color: 'rgba(87,187,149,0.55)', letterSpacing: '0.08em' }}>
-              Start preview when ready
-            </Typography>
-          </Box>
-        </Box>
-      )
+      return <ChannelStateAnimation status="ready" />
     }
 
     // Creating state — large amber sonar rings expanding to fill the frame
     if (s === 'creating') {
-      return (
-        <Box sx={{
-          position: 'relative',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          height: '100%', overflow: 'hidden',
-          background: 'radial-gradient(ellipse at 50% 50%, rgba(245,158,11,0.12) 0%, transparent 68%)',
-        }}>
-          {/* Sonar rings — start tiny, expand to fill/overflow the frame */}
-          {[1, 2, 3, 4, 5].map(i => (
-            <Box key={i} sx={{
-              position: 'absolute',
-              left: '50%', top: '50%',
-              transform: 'translate(-50%, -50%)',
-              width: `${i * 22}%`,
-              aspectRatio: '1',
-              borderRadius: '50%',
-              border: `1.5px solid rgba(245,158,11,${0.8 - i * 0.1})`,
-              opacity: 0,
-              animation: `createSonar 3.2s ease-out ${(i - 1) * 0.55}s infinite`,
-              '@keyframes createSonar': {
-                '0%':   { transform: 'translate(-50%, -50%) scale(0.1)', opacity: 0.95 },
-                '100%': { transform: 'translate(-50%, -50%) scale(1)',   opacity: 0 },
-              },
-            }} />
-          ))}
-
-          {/* Label — absolutely centered over the rings */}
-          <Box sx={{
-            position: 'absolute', zIndex: 1,
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.75,
-          }}>
-            <Typography sx={{
-              fontSize: '1rem', fontWeight: 700, letterSpacing: '0.22em',
-              color: '#f59e0b', textTransform: 'uppercase',
-              animation: 'fadeLblAmber 2.2s ease-in-out infinite',
-              '@keyframes fadeLblAmber': { '0%,100%': { opacity: 0.4 }, '50%': { opacity: 1 } },
-            }}>
-              Initializing Stream
-            </Typography>
-            <Box sx={{ display: 'flex', gap: '5px' }}>
-              {[0, 1, 2].map(i => (
-                <Box key={i} sx={{
-                  width: 4, height: 4, borderRadius: '50%', bgcolor: '#f59e0b',
-                  animation: `dotA 1.3s ease-in-out ${i * 0.22}s infinite`,
-                  '@keyframes dotA': { '0%,80%,100%': { transform: 'scale(0.5)', opacity: 0.25 }, '40%': { transform: 'scale(1)', opacity: 1 } },
-                }} />
-              ))}
-            </Box>
-          </Box>
-        </Box>
-      )
+      return <ChannelStateAnimation status="creating" />
     }
 
     // Past / idle
-    return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 1.5, opacity: 0.25 }}>
-        <Box component="svg" viewBox="0 0 64 64" sx={{ width: 44, height: 44, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, color: '#94a3b8' }}>
-          <circle cx="32" cy="32" r="26" /><path d="M26 20l16 12-16 12V20z" />
-        </Box>
-        <Typography sx={{ fontSize: '0.75rem', color: '#94a3b8' }}>No active stream</Typography>
-      </Box>
-    )
+    return <ChannelStateAnimation status={s} />
   }
 
   // ─── Render ──────────────────────────────────────────────────────────────────
@@ -1071,8 +843,10 @@ export default function StreamPage() {
               </Typography>
             </Tooltip>
           )}
-          {/* Stop Stream — 24/7 live channels only */}
-          {channel.stream_type === '24/7' && (isLive || waitingForStop) && s !== 'stopping' && (
+          {/* Stop Stream — 24/7 live channels only. Hidden once the status pill
+              itself already conveys stopping/destroying progress, so the two
+              don't show redundant/conflicting text at the same time. */}
+          {channel.stream_type === '24/7' && (isLive || waitingForStop) && !['stopping', 'destroying', 'deleting'].includes(s) && (
             <Tooltip title={stopError || (waitingForStop ? 'Waiting for stream to stop…' : 'Stop the 24/7 stream')}>
               <span>
                 <Button
@@ -1177,6 +951,7 @@ export default function StreamPage() {
                       logo={<Box component="img" src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg" sx={{ width: 16, height: 16 }} />}
                       accentColor="#ff0000"
                       isLive={isLive}
+                      statusBadge={<YoutubePrivacyBadge status={channel.youtube_privacy} />}
                     >
                       <Box
                         component="iframe"

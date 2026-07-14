@@ -8,6 +8,8 @@ import EditIcon from '@mui/icons-material/Edit'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import DeleteIcon from '@mui/icons-material/Delete'
 import RouterIcon from '@mui/icons-material/Router'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
+import { getStatusDisplay } from '../lib/streamStatus'
 
 const AP = {
   accent:    '#6366f1',
@@ -32,25 +34,32 @@ const INGEST_FORMAT_LABELS = {
   hls: 'HLS (Push)', hls_pull: 'HLS (Pull)', rtp: 'RTP', rtp_fec: 'RTP + FEC',
 }
 
-// Encoders don't carry their own persisted "live" flag — the underlying 24/7
-// channel does (via JW). Mirrors the palette used for the Live Streams list.
-const CHANNEL_STATUS_CFG = {
-  active:     { label: 'Live',       color: '#10b981', bg: 'rgba(16,185,129,0.15)',  border: 'rgba(16,185,129,0.4)',  pulse: true  },
-  streaming:  { label: 'Live',       color: '#10b981', bg: 'rgba(16,185,129,0.15)',  border: 'rgba(16,185,129,0.4)',  pulse: true  },
-  starting:   { label: 'Starting',   color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  border: 'rgba(56,189,248,0.35)', pulse: true  },
-  creating:   { label: 'Creating',   color: '#f59e0b', bg: 'rgba(245,158,11,0.15)',  border: 'rgba(245,158,11,0.4)',  pulse: true  },
-  ready:      { label: 'Ready',      color: '#57BB95', bg: 'rgba(87,187,149,0.15)',  border: 'rgba(87,187,149,0.4)',  pulse: false },
-  stopping:   { label: 'Stopping',   color: '#f87171', bg: 'rgba(239,68,68,0.12)',   border: 'rgba(239,68,68,0.35)',  pulse: true  },
-  destroying: { label: 'Destroying', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',   border: 'rgba(245,158,11,0.35)', pulse: true  },
-  idle:       { label: 'Offline',    color: '#94a3b8', bg: 'rgba(100,116,139,0.15)', border: 'rgba(100,116,139,0.4)', pulse: false },
-}
-
-function EncoderStatusChip({ status, loading }) {
+function EncoderStatusChip({ status, loading, channelNotFound }) {
   if (loading) return null
-  const cfg = CHANNEL_STATUS_CFG[status?.toLowerCase()] || {
-    label: status ? status : 'Unknown', color: AP.muted,
-    bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.25)', pulse: false,
+
+  // The assigned channel_id no longer exists in JW (deleted/replaced) —
+  // this is a distinct, actionable problem from any normal status, so it
+  // gets its own badge rather than falling through to a generic "Offline".
+  if (channelNotFound) {
+    return (
+      <Tooltip title="This encoder's assigned channel no longer exists in JW Player — reassign it in Edit">
+        <Box sx={{
+          display: 'inline-flex', alignItems: 'center', gap: 0.5, px: '7px', height: 20,
+          borderRadius: '5px', fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.04em',
+          bgcolor: 'rgba(239,68,68,0.14)', color: '#f87171', border: '1px solid rgba(239,68,68,0.4)', flexShrink: 0,
+        }}>
+          <WarningAmberIcon sx={{ fontSize: 12 }} />
+          Channel Not Found
+        </Box>
+      </Tooltip>
+    )
   }
+
+  // Encoders don't carry their own persisted "live" flag — the underlying
+  // 24/7 channel does (via JW) — so status/color come from the same shared
+  // map every other stream status view reads from ("Offline" here instead
+  // of "Idle" is the one label override that's specific to this list).
+  const cfg = getStatusDisplay({ status, stream_type: '24/7' }, { idleLabel: 'Offline' })
   return (
     <Box sx={{
       display: 'inline-flex', alignItems: 'center', gap: 0.5, px: '7px', height: 20,
@@ -91,7 +100,7 @@ function SimulcastBadges({ encoder }) {
   )
 }
 
-function EncoderCard({ encoder, channelStatus, channelStatusLoading, readOnly, onEdit, onOpen, onDelete }) {
+function EncoderCard({ encoder, channelStatus, channelStatusLoading, channelNotFound, readOnly, onEdit, onOpen, onDelete }) {
   return (
     <Box sx={{
       border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)',
@@ -101,7 +110,7 @@ function EncoderCard({ encoder, channelStatus, channelStatusLoading, readOnly, o
         <Box sx={{ minWidth: 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
             <Typography sx={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff' }}>{encoder.name}</Typography>
-            <EncoderStatusChip status={channelStatus} loading={channelStatusLoading} />
+            <EncoderStatusChip status={channelStatus} loading={channelStatusLoading} channelNotFound={channelNotFound} />
           </Box>
           {encoder.description && (
             <Typography sx={{ fontSize: '0.75rem', color: AP.muted, mt: 0.25 }}>{encoder.description}</Typography>
@@ -195,6 +204,7 @@ export default function EncoderList({ token, tenantId, readOnly }) {
 
   const channelStatusById = {}
   channels.forEach(c => { channelStatusById[c.id] = c.status })
+  const knownChannelIds = new Set(channels.map(c => c.id))
 
   async function handleDelete(encoder) {
     if (!confirm(`Delete encoder "${encoder.name}"?\n\nThis cannot be undone.`)) return
@@ -263,6 +273,7 @@ export default function EncoderList({ token, tenantId, readOnly }) {
               encoder={encoder}
               channelStatus={channelStatusById[encoder.channel_id]}
               channelStatusLoading={channelsLoading}
+              channelNotFound={!channelsLoading && !!encoder.channel_id && !knownChannelIds.has(encoder.channel_id)}
               readOnly={readOnly}
               onEdit={e => navigate(`/admin/encoders/${e.id}/edit`)}
               onOpen={e => navigate(`/admin/encoders/${e.id}`)}
