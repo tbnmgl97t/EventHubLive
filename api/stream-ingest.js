@@ -1,4 +1,5 @@
 import { resolveTenantSession, getTenantJwCreds } from './_utils/tenant.js'
+import { jwFetch } from './_utils/jw.js'
 
 // Push formats (rtmp, srt, ...) nest credentials under `ingest_point.{url,key}`.
 // Pull formats (hls_pull, srt_pull, ...) have no key — JW pulls *from* a source
@@ -21,7 +22,7 @@ export default async function handler(req, res) {
 
   try {
     const url = `https://api.jwplayer.com/v2/sites/${jw.siteId}/live/broadcast/streams/${encodeURIComponent(id)}/`
-    const r = await fetch(url, { headers: { Authorization: jw.apiSecret, Accept: 'application/json' } })
+    const r = await jwFetch(jw, url)
     const body = await r.text()
 
     if (!r.ok) {

@@ -1,5 +1,6 @@
 import { resolveTenantSession, getTenantJwCreds } from './_utils/tenant.js'
 import { supabase }    from './_utils/supabase.js'
+import { jwFetch }     from './_utils/jw.js'
 
 // Push formats (rtmp, srt, ...) nest credentials under `ingest_point.{url,key}`.
 // Pull formats (hls_pull, srt_pull, ...) have no key — JW pulls *from* a source
@@ -22,8 +23,8 @@ export default async function handler(req, res) {
     const ingestUrl  = `https://api.jwplayer.com/v2/sites/${jw.siteId}/live/broadcast/ingest/availability/?ingest_format=rtmp&page=1&page_length=50`
 
     const [streamsRes, ingestRes, ytRes, fbRes] = await Promise.all([
-      fetch(streamsUrl, { headers: { Authorization: jw.apiSecret, Accept: 'application/json' } }),
-      fetch(ingestUrl,  { headers: { Authorization: jw.apiSecret, Accept: 'application/json' } }),
+      jwFetch(jw, streamsUrl),
+      jwFetch(jw, ingestUrl),
       supabase.from('youtube_streams').select('*'),
       supabase.from('facebook_streams').select('*'),
     ])
