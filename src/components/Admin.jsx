@@ -44,6 +44,7 @@ import RouterIcon from '@mui/icons-material/Router'
 import MenuIcon from '@mui/icons-material/Menu'
 import { useTenant } from '../contexts/TenantContext'
 import { supabase } from '../lib/supabaseClient'
+import { getStatusDisplay, getStreamStatusKey, resolveIdleStatus, getSpinupStatus } from '../lib/streamStatus'
 
 const SESSION_KEY       = 'ri_admin_token'
 const ACTIVE_TENANT_KEY = 'ri_active_tenant'
@@ -182,38 +183,9 @@ function getTournamentDateRange(tournament) {
 }
 
 // ─── Spin-up status (admin preview window = ±30 min) ─────────────────────────
+// resolveIdleStatus lives in src/lib/streamStatus.js (shared with every other
+// view that needs to know whether an "idle" channel is upcoming or past).
 
-const SPINUP_MINS = 30
-
-// JW uses 'idle' for both pre-start and post-end — use time to tell them apart
-function resolveIdleStatus(ch) {
-  if (!ch.stream_start) return 'past'
-  const now   = Date.now()
-  const start = new Date(ch.stream_start).getTime()
-  const end   = ch.stream_end ? new Date(ch.stream_end).getTime() : null
-  if (start > now) return 'upcoming'          // hasn't started yet
-  if (end && now < end) return 'upcoming'     // currently within window
-  return 'past'
-}
-
-function getSpinupStatus(ch) {
-  if (!ch.stream_start) return null
-  const s = ch.status?.toLowerCase()
-  // Terminal / in-progress states never get a spinup overlay
-  if (['active', 'streaming', 'stopping', 'destroying', 'deleting', 'idle'].includes(s)) return null
-  // For unknown statuses only show spinup badge if the stream is upcoming
-  if (!['requested', 'scheduled', 'creating'].includes(s)) {
-    if (resolveIdleStatus(ch) !== 'upcoming') return null
-  }
-  const now   = Date.now()
-  const start = new Date(ch.stream_start).getTime()
-  const end   = ch.stream_end ? new Date(ch.stream_end).getTime() : null
-  const minsToStart   = (start - now) / 60_000
-  const minsAfterEnd  = end ? (now - end) / 60_000 : null
-  if (minsToStart > 0 && minsToStart <= SPINUP_MINS)                             return 'starting_soon'
-  if (minsAfterEnd !== null && minsAfterEnd >= 0 && minsAfterEnd <= SPINUP_MINS) return 'winding_down'
-  return null
-}
 
 // ─── Cost helpers ─────────────────────────────────────────────────────────────
 
@@ -866,8 +838,7 @@ function ChannelPickerDialog({ open, slot, day, channels, onClose, onPick }) {
             {[...channels].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(ch => {
               const isLive   = ch.status === 'active' || ch.status === 'streaming'
               const isActive = ch.stream_url === currentUrl && !!currentUrl
-              const STATUS_LABELS = { requested: 'Scheduled', scheduled: 'Scheduled', creating: 'Creating', active: 'Live', idle: 'Idle', stopping: 'Stopping', destroying: 'Destroying' }
-              const statusLabel = STATUS_LABELS[ch.status?.toLowerCase()] || ch.status || 'Idle'
+              const statusLabel = getStatusDisplay(ch, { idleLabel: 'Idle' }).label
               return (
                 <Paper
                   key={ch.id}
@@ -974,6 +945,24 @@ const INGEST_FORMATS = [
 const REGIONS = [
   { value: 'us-east-1', label: 'US East (us-east-1)' },
   { value: 'eu-west-1', label: 'EU West (eu-west-1)' },
+]
+
+// How far back footage can be clipped from a 24/7 stream — JW's allowed enum values
+const CLIPPING_WINDOWS = ['4h', '6h', '12h', '24h', '36h']
+
+const TIMEZONE_OPTIONS = [
+  { value: 'America/New_York',    label: 'Eastern Time (ET)'    },
+  { value: 'America/Chicago',     label: 'Central Time (CT)'    },
+  { value: 'America/Denver',      label: 'Mountain Time (MT)'   },
+  { value: 'America/Phoenix',     label: 'Mountain Time – AZ (no DST)' },
+  { value: 'America/Los_Angeles', label: 'Pacific Time (PT)'    },
+  { value: 'America/Anchorage',   label: 'Alaska Time (AKT)'    },
+  { value: 'Pacific/Honolulu',    label: 'Hawaii Time (HT)'     },
+  { value: 'America/Puerto_Rico', label: 'Atlantic Time (AST)'  },
+  { value: 'Europe/London',       label: 'London (GMT/BST)'     },
+  { value: 'Europe/Paris',        label: 'Central Europe (CET)' },
+  { value: 'Asia/Tokyo',          label: 'Japan (JST)'          },
+  { value: 'Australia/Sydney',    label: 'Sydney (AEST)'        },
 ]
 
 // Compute date ("YYYY-MM-DD") and time ("HH:MM") for a given Date in a specific timezone
@@ -1106,21 +1095,6 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview, t
     }
   }
 
-  const STATUS_CFG = {
-    active:     { label: 'Live',        bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
-    streaming:  { label: 'Live',        bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
-    requested:  { label: 'Scheduled',   bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
-    scheduled:  { label: 'Scheduled',   bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
-    creating:   { label: 'Creating',    bg: 'rgba(245,158,11,0.15)',  color: '#f59e0b', border: 'rgba(245,158,11,0.4)'  },
-    starting:   { label: 'Starting',    bg: 'rgba(56,189,248,0.12)',  color: '#38bdf8', border: 'rgba(56,189,248,0.35)' },
-    ready:      { label: 'Ready',       bg: 'rgba(87,187,149,0.15)',  color: '#57BB95', border: 'rgba(87,187,149,0.4)'  },
-    idle:       { label: 'Past Event',   bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
-    stopping:   { label: 'Stopping',    bg: 'rgba(239,68,68,0.12)',   color: '#f87171', border: 'rgba(239,68,68,0.35)'  },
-    destroying: { label: 'Destroying',  bg: 'rgba(245,158,11,0.1)',   color: '#f59e0b', border: 'rgba(245,158,11,0.35)' },
-    deleting:   { label: 'Deleting',    bg: 'rgba(245,158,11,0.1)',   color: '#f59e0b', border: 'rgba(245,158,11,0.35)' },
-  }
-  const cfg = STATUS_CFG[ch.status?.toLowerCase()] || STATUS_CFG.idle
-
   const fmtTime = iso => iso
     ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: TZ })
     : null
@@ -1179,17 +1153,18 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview, t
     </Typography>
   )
 
-  const STATUS_CFG_GLOW = {
-    active:     { ...STATUS_CFG.active,     glow: 'rgba(16,185,129,0.2)'  },
-    requested:  { ...STATUS_CFG.requested,  glow: 'rgba(99,102,241,0.15)' },
-    scheduled:  { ...STATUS_CFG.scheduled,  glow: 'rgba(99,102,241,0.15)' },
-    creating:   { ...STATUS_CFG.creating,   glow: 'rgba(245,158,11,0.15)' },
-    idle:       { ...STATUS_CFG.idle,       glow: 'rgba(100,116,139,0.08)'},
-    stopping:   { ...STATUS_CFG.stopping,   glow: 'rgba(239,68,68,0.1)'   },
-    destroying: { ...STATUS_CFG.destroying, glow: 'rgba(245,158,11,0.08)' },
-    deleting:   { ...STATUS_CFG.deleting,   glow: 'rgba(245,158,11,0.08)' },
+  const GLOW_BY_STATUS_KEY = {
+    active:     'rgba(16,185,129,0.2)',
+    streaming:  'rgba(16,185,129,0.2)',
+    scheduled:  'rgba(99,102,241,0.15)',
+    creating:   'rgba(245,158,11,0.15)',
+    idle:       'rgba(100,116,139,0.08)',
+    idle_247:   'rgba(100,116,139,0.08)',
+    stopping:   'rgba(239,68,68,0.1)',
+    destroying: 'rgba(245,158,11,0.08)',
+    deleting:   'rgba(245,158,11,0.08)',
   }
-  const cfgG = STATUS_CFG_GLOW[ch.status?.toLowerCase()] || STATUS_CFG_GLOW.idle
+  const cfgG = { ...getStatusDisplay(ch), glow: GLOW_BY_STATUS_KEY[getStreamStatusKey(ch)] || GLOW_BY_STATUS_KEY.idle }
 
   return (
     <Drawer anchor="right" open={open} onClose={onClose}
@@ -1272,7 +1247,12 @@ function StreamDetailDrawer({ open, channel: ch, onClose, onDelete, onPreview, t
         {/* Stream ID */}
         <Box>
           <SectionLabel>Stream Info</SectionLabel>
-          <CredCard label="Stream ID" value={ch.id} field="id" icon={LinkIcon} />
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+            <CredCard label="Stream ID" value={ch.id} field="id" icon={LinkIcon} />
+            {ch.stream_type === '24/7' && (
+              <CredCard label="Clipping Window" value={ch.clipping_window} field="clipping_window" />
+            )}
+          </Box>
         </Box>
 
         {/* Playback */}
@@ -1518,8 +1498,10 @@ function CreateStreamDrawer({ open, token, tenantId, onClose, onCreated }) {
   const [ingestPointId, setIngestPointId] = useState('')
   const [ingestPoints, setIngestPoints]   = useState([])
   const [loadingPoints, setLoadingPoints] = useState(false)
+  const [clippingWindow,  setClippingWindow]  = useState('4h')
   const [downloadable,    setDownloadable]    = useState(false)
   const [createYoutube,       setCreateYoutube]       = useState(false)
+  const [youtubePrivacyStatus, setYoutubePrivacyStatus] = useState('public') // 'public' | 'unlisted' | 'private'
   const [youtubeConnected,    setYoutubeConnected]    = useState(false)
   const [youtubeChannel,      setYoutubeChannel]      = useState(null)
   const [youtubeThumbnail,    setYoutubeThumbnail]    = useState(null)   // File object
@@ -1554,8 +1536,10 @@ function CreateStreamDrawer({ open, token, tenantId, onClose, onCreated }) {
     setEndDate(t.endDate)
     setEndTime(t.endTime)
     setIngestPointId('')
+    setClippingWindow('4h')
     setDownloadable(false)
     setCreateYoutube(false)
+    setYoutubePrivacyStatus('public')
     setYoutubeThumbnail(null)
     setYtThumbPreview(null)
     setYtThumbStatus('idle')
@@ -1698,8 +1682,10 @@ function CreateStreamDrawer({ open, token, tenantId, onClose, onCreated }) {
         ingest_format: ingestFormat,
         ingest_point_id: ingestPointId || undefined,
         source_url: isPullFormat ? sourceUrl.trim() : undefined,
+        clipping_window: channelType === 'always_on' ? clippingWindow : undefined,
         downloadable,
         create_youtube:  createYoutube  && youtubeConnected,
+        youtube_privacy_status: youtubePrivacyStatus,
         create_facebook: createFacebook && facebookConnected,
       }
 
@@ -1890,6 +1876,17 @@ function CreateStreamDrawer({ open, token, tenantId, onClose, onCreated }) {
                   })}
                 </Box>
               </Box>
+
+              {/* ── Clipping Window (24/7 channels only) ────────── */}
+              {channelType === 'always_on' && (
+                <TextField
+                  select fullWidth size="small" label="Clipping Window"
+                  value={clippingWindow} onChange={e => setClippingWindow(e.target.value)}
+                  helperText="How far back footage can be clipped from this stream"
+                >
+                  {CLIPPING_WINDOWS.map(w => <MenuItem key={w} value={w}>{w}</MenuItem>)}
+                </TextField>
+              )}
 
               <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)' }} />
 
@@ -2162,6 +2159,18 @@ function CreateStreamDrawer({ open, token, tenantId, onClose, onCreated }) {
                 </Box>
               )}
 
+              {createYoutube && youtubeConnected && (
+                <TextField
+                  select size="small" label="YouTube Privacy" fullWidth
+                  value={youtubePrivacyStatus} onChange={e => setYoutubePrivacyStatus(e.target.value)}
+                  helperText="Starting visibility of the created broadcast — you can change it later on YouTube"
+                >
+                  <MenuItem value="public">Public</MenuItem>
+                  <MenuItem value="unlisted">Unlisted</MenuItem>
+                  <MenuItem value="private">Private</MenuItem>
+                </TextField>
+              )}
+
               {/* ── Facebook Simulcast ────────────────────────── */}
               {facebookConnected ? (
                 <Box
@@ -2381,7 +2390,15 @@ function CreateStreamDrawer({ open, token, tenantId, onClose, onCreated }) {
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Typography variant="caption" sx={{ color: AP.muted, fontWeight: 700, letterSpacing: '0.07em', fontSize: '0.6rem' }}>STATUS</Typography>
                   <Chip
-                    label={{ requested: 'Scheduled', scheduled: 'Scheduled', creating: 'Creating', active: 'Live', idle: 'Idle' }[result.status] || result.status || 'Creating'}
+                    label={
+                      // No status back yet right after creation → still Creating.
+                      // Otherwise defer to the shared status map so this reads the
+                      // same "Scheduled" (Event) vs "Creating" (24/7) rule as every
+                      // other stream status display in the app.
+                      result.status
+                        ? getStatusDisplay({ status: result.status, stream_type: result.stream_type }).label
+                        : 'Creating'
+                    }
                     size="small"
                     sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: 'rgba(255,255,255,0.06)', color: AP.muted }}
                   />
@@ -3261,20 +3278,7 @@ function TenantSettingsPanel({ token, tenantId }) {
               onChange={e => setField('timezone', e.target.value)}
               helperText="All event times are displayed in this timezone"
             >
-              {[
-                { value: 'America/New_York',    label: 'Eastern Time (ET)'    },
-                { value: 'America/Chicago',     label: 'Central Time (CT)'    },
-                { value: 'America/Denver',      label: 'Mountain Time (MT)'   },
-                { value: 'America/Phoenix',     label: 'Mountain Time – AZ (no DST)' },
-                { value: 'America/Los_Angeles', label: 'Pacific Time (PT)'    },
-                { value: 'America/Anchorage',   label: 'Alaska Time (AKT)'    },
-                { value: 'Pacific/Honolulu',    label: 'Hawaii Time (HT)'     },
-                { value: 'America/Puerto_Rico', label: 'Atlantic Time (AST)'  },
-                { value: 'Europe/London',       label: 'London (GMT/BST)'     },
-                { value: 'Europe/Paris',        label: 'Central Europe (CET)' },
-                { value: 'Asia/Tokyo',          label: 'Japan (JST)'          },
-                { value: 'Australia/Sydney',    label: 'Sydney (AEST)'        },
-              ].map(opt => (
+              {TIMEZONE_OPTIONS.map(opt => (
                 <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
               ))}
             </TextField>
@@ -3341,13 +3345,15 @@ function TenantSettingsPanel({ token, tenantId }) {
   )
 }
 
-// ─── YouTube Integration Panel ────────────────────────────────────────────────
+// ─── YouTube Integration ──────────────────────────────────────────────────────
 
-function YouTubeIntegrationPanel({ token, tenantId }) {
-  const [status,       setStatus]       = useState(null)   // null | { connected, channel_name, channel_thumbnail }
-  const [loading,      setLoading]      = useState(true)
+const YOUTUBE_ICON_URL = 'https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg'
+
+function useYoutubeIntegration(token, tenantId) {
+  const [status,        setStatus]        = useState(null)   // null | { connected, channel_name, channel_thumbnail }
+  const [loading,       setLoading]       = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
-  const [connecting,   setConnecting]   = useState(false)
+  const [connecting,    setConnecting]    = useState(false)
 
   useEffect(() => {
     fetch('/api/youtube-status', { headers: authHeader(token, tenantId) })
@@ -3357,7 +3363,7 @@ function YouTubeIntegrationPanel({ token, tenantId }) {
       .finally(() => setLoading(false))
   }, [token, tenantId])
 
-  async function handleConnect() {
+  async function connect() {
     setConnecting(true)
     try {
       const res = await fetch('/api/oauth-ticket', { headers: authHeader(token, tenantId) })
@@ -3370,7 +3376,7 @@ function YouTubeIntegrationPanel({ token, tenantId }) {
     }
   }
 
-  async function handleDisconnect() {
+  async function disconnect() {
     if (!confirm('Disconnect YouTube? Future streams will not simulcast to YouTube.')) return
     setDisconnecting(true)
     try {
@@ -3386,82 +3392,98 @@ function YouTubeIntegrationPanel({ token, tenantId }) {
     }
   }
 
-  return (
-    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
-        <Box component="img"
-          src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"
-          sx={{ width: 24, height: 24 }}
-        />
-        <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>YouTube</Typography>
-        <Typography sx={{ fontSize: '0.72rem', color: AP.muted }}>Simulcast live streams to your YouTube channel</Typography>
-      </Box>
+  return { status, loading, connecting, disconnecting, connect, disconnect }
+}
 
-      {loading ? (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CircularProgress size={14} sx={{ color: AP.muted }} />
-          <Typography sx={{ fontSize: '0.75rem', color: AP.muted }}>Checking connection…</Typography>
-        </Box>
-      ) : status?.connected ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-            {status.channel_thumbnail && (
-              <Box component="img" src={status.channel_thumbnail}
-                sx={{ width: 32, height: 32, borderRadius: '50%', border: '2px solid rgba(255,0,0,0.4)' }}
-              />
-            )}
-            <Box sx={{ flex: 1 }}>
-              <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: '#fff' }}>{status.channel_name || 'Google Account (no channel)'}</Typography>
-              <Typography sx={{ fontSize: '0.68rem', color: AP.live }}>● Connected</Typography>
-            </Box>
-            <Button
-              size="small" variant="outlined"
-              onClick={handleDisconnect}
-              disabled={disconnecting}
-              sx={{ fontSize: '0.72rem', borderColor: 'rgba(239,68,68,0.4)', color: '#f87171',
-                '&:hover': { borderColor: '#f87171', bgcolor: 'rgba(239,68,68,0.08)' } }}
-            >
-              {disconnecting ? <CircularProgress size={12} /> : 'Disconnect'}
-            </Button>
+function YouTubeEditDialog({ open, onClose, integration }) {
+  const { status, loading, connecting, disconnecting, connect, disconnect } = integration
+
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box component="img" src={YOUTUBE_ICON_URL} sx={{ width: 22, height: 22 }} />
+        YouTube
+        <IconButton size="small" onClick={onClose} sx={{ ml: 'auto' }}><CloseIcon fontSize="small" /></IconButton>
+      </DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <Typography sx={{ fontSize: '0.75rem', color: AP.muted, mt: -1, mb: 0.5 }}>Simulcast live streams to your YouTube channel</Typography>
+
+        {loading ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <CircularProgress size={14} sx={{ color: AP.muted }} />
+            <Typography sx={{ fontSize: '0.75rem', color: AP.muted }}>Checking connection…</Typography>
           </Box>
-          {!status.channel_name && (
-            <Box sx={{ bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1.5, px: 1.5, py: 1 }}>
-              <Typography sx={{ fontSize: '0.7rem', color: '#fbbf24', lineHeight: 1.5 }}>
-                No YouTube channel found on this account. To simulcast, the connected Google account must have a YouTube channel.{' '}
-                <Box component="a" href="https://www.youtube.com/create_channel" target="_blank" rel="noopener noreferrer"
-                  sx={{ color: '#fbbf24', textDecoration: 'underline' }}>
-                  Create one on YouTube
-                </Box>
-                {' '}then disconnect and reconnect here.
-              </Typography>
+        ) : status?.connected ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              {status.channel_thumbnail && (
+                <Box component="img" src={status.channel_thumbnail}
+                  sx={{ width: 32, height: 32, borderRadius: '50%', border: '2px solid rgba(255,0,0,0.4)' }}
+                />
+              )}
+              <Box sx={{ flex: 1 }}>
+                <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: '#fff' }}>{status.channel_name || 'Google Account (no channel)'}</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: AP.live }}>● Connected</Typography>
+              </Box>
+              <Button
+                size="small" variant="outlined"
+                onClick={disconnect}
+                disabled={disconnecting}
+                sx={{ fontSize: '0.72rem', borderColor: 'rgba(239,68,68,0.4)', color: '#f87171',
+                  '&:hover': { borderColor: '#f87171', bgcolor: 'rgba(239,68,68,0.08)' } }}
+              >
+                {disconnecting ? <CircularProgress size={12} /> : 'Disconnect'}
+              </Button>
             </Box>
-          )}
-        </Box>
-      ) : (
-        <Button
-          variant="contained"
-          onClick={handleConnect}
-          disabled={connecting}
-          startIcon={
-            connecting ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : (
-              <Box component="img"
-                src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"
-                sx={{ width: 16, height: 16 }}
-              />
-            )
-          }
-          sx={{ bgcolor: '#ff0000', '&:hover': { bgcolor: '#cc0000' }, fontWeight: 700, fontSize: '0.78rem', textDecoration: 'none' }}
-        >
-          Connect YouTube Account
-        </Button>
-      )}
+            {!status.channel_name && (
+              <Box sx={{ bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1.5, px: 1.5, py: 1 }}>
+                <Typography sx={{ fontSize: '0.7rem', color: '#fbbf24', lineHeight: 1.5 }}>
+                  No YouTube channel found on this account. To simulcast, the connected Google account must have a YouTube channel.{' '}
+                  <Box component="a" href="https://www.youtube.com/create_channel" target="_blank" rel="noopener noreferrer"
+                    sx={{ color: '#fbbf24', textDecoration: 'underline' }}>
+                    Create one on YouTube
+                  </Box>
+                  {' '}then disconnect and reconnect here.
+                </Typography>
+              </Box>
+            )}
+          </Box>
+        ) : (
+          <Button
+            variant="contained"
+            onClick={connect}
+            disabled={connecting}
+            startIcon={
+              connecting ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : (
+                <Box component="img" src={YOUTUBE_ICON_URL} sx={{ width: 16, height: 16 }} />
+              )
+            }
+            sx={{ bgcolor: '#ff0000', '&:hover': { bgcolor: '#cc0000' }, fontWeight: 700, fontSize: '0.78rem', textDecoration: 'none', alignSelf: 'flex-start' }}
+          >
+            Connect YouTube Account
+          </Button>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Facebook Integration ─────────────────────────────────────────────────────
+
+// Facebook "f" logo — inline SVG keeps us dependency-free
+const FACEBOOK_F_PATH = 'M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z'
+
+function FacebookIcon({ size = 24 }) {
+  return (
+    <Box sx={{ width: size, height: size, borderRadius: '6px', bgcolor: '#1877F2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Box component="svg" viewBox="0 0 24 24" sx={{ width: size * 0.58, height: size * 0.58, fill: '#fff' }}>
+        <path d={FACEBOOK_F_PATH} />
+      </Box>
     </Box>
   )
 }
 
-// ─── Facebook Integration Panel ──────────────────────────────────────────────
-
-function FacebookIntegrationPanel({ token, tenantId }) {
+function useFacebookIntegration(token, tenantId) {
   const [status,        setStatus]        = useState(null)   // null | { connected, page_id, page_name, page_picture }
   const [loading,       setLoading]       = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
@@ -3475,7 +3497,7 @@ function FacebookIntegrationPanel({ token, tenantId }) {
       .finally(() => setLoading(false))
   }, [token, tenantId])
 
-  async function handleConnect() {
+  async function connect() {
     setConnecting(true)
     try {
       const res = await fetch('/api/oauth-ticket', { headers: authHeader(token, tenantId) })
@@ -3488,7 +3510,7 @@ function FacebookIntegrationPanel({ token, tenantId }) {
     }
   }
 
-  async function handleDisconnect() {
+  async function disconnect() {
     if (!confirm('Disconnect Facebook? Future streams will not simulcast to Facebook.')) return
     setDisconnecting(true)
     try {
@@ -3504,65 +3526,61 @@ function FacebookIntegrationPanel({ token, tenantId }) {
     }
   }
 
-  return (
-    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
-        {/* Facebook "f" logo — inline SVG keeps us dependency-free */}
-        <Box sx={{ width: 24, height: 24, borderRadius: '6px', bgcolor: '#1877F2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <Box component="svg" viewBox="0 0 24 24" sx={{ width: 14, height: 14, fill: '#fff' }}>
-            <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
-          </Box>
-        </Box>
-        <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>Facebook</Typography>
-        <Typography sx={{ fontSize: '0.72rem', color: AP.muted }}>Simulcast live streams to your Facebook Page</Typography>
-      </Box>
+  return { status, loading, connecting, disconnecting, connect, disconnect }
+}
 
-      {loading ? (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CircularProgress size={14} sx={{ color: AP.muted }} />
-          <Typography sx={{ fontSize: '0.75rem', color: AP.muted }}>Checking connection…</Typography>
-        </Box>
-      ) : status?.connected ? (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          {status.page_picture && (
-            <Box component="img" src={status.page_picture}
-              sx={{ width: 32, height: 32, borderRadius: '50%', border: '2px solid rgba(24,119,242,0.5)' }}
-            />
-          )}
-          <Box sx={{ flex: 1 }}>
-            <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: '#fff' }}>{status.page_name || 'Facebook Page'}</Typography>
-            <Typography sx={{ fontSize: '0.68rem', color: '#60a5fa' }}>● Connected</Typography>
+function FacebookEditDialog({ open, onClose, integration }) {
+  const { status, loading, connecting, disconnecting, connect, disconnect } = integration
+
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <FacebookIcon size={22} />
+        Facebook
+        <IconButton size="small" onClick={onClose} sx={{ ml: 'auto' }}><CloseIcon fontSize="small" /></IconButton>
+      </DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <Typography sx={{ fontSize: '0.75rem', color: AP.muted, mt: -1, mb: 0.5 }}>Simulcast live streams to your Facebook Page</Typography>
+
+        {loading ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <CircularProgress size={14} sx={{ color: AP.muted }} />
+            <Typography sx={{ fontSize: '0.75rem', color: AP.muted }}>Checking connection…</Typography>
           </Box>
+        ) : status?.connected ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            {status.page_picture && (
+              <Box component="img" src={status.page_picture}
+                sx={{ width: 32, height: 32, borderRadius: '50%', border: '2px solid rgba(24,119,242,0.5)' }}
+              />
+            )}
+            <Box sx={{ flex: 1 }}>
+              <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: '#fff' }}>{status.page_name || 'Facebook Page'}</Typography>
+              <Typography sx={{ fontSize: '0.68rem', color: '#60a5fa' }}>● Connected</Typography>
+            </Box>
+            <Button
+              size="small" variant="outlined"
+              onClick={disconnect}
+              disabled={disconnecting}
+              sx={{ fontSize: '0.72rem', borderColor: 'rgba(239,68,68,0.4)', color: '#f87171',
+                '&:hover': { borderColor: '#f87171', bgcolor: 'rgba(239,68,68,0.08)' } }}
+            >
+              {disconnecting ? <CircularProgress size={12} /> : 'Disconnect'}
+            </Button>
+          </Box>
+        ) : (
           <Button
-            size="small" variant="outlined"
-            onClick={handleDisconnect}
-            disabled={disconnecting}
-            sx={{ fontSize: '0.72rem', borderColor: 'rgba(239,68,68,0.4)', color: '#f87171',
-              '&:hover': { borderColor: '#f87171', bgcolor: 'rgba(239,68,68,0.08)' } }}
+            variant="contained"
+            onClick={connect}
+            disabled={connecting}
+            startIcon={connecting ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : <FacebookIcon size={16} />}
+            sx={{ bgcolor: '#1877F2', '&:hover': { bgcolor: '#1464d0' }, fontWeight: 700, fontSize: '0.78rem', textDecoration: 'none', alignSelf: 'flex-start' }}
           >
-            {disconnecting ? <CircularProgress size={12} /> : 'Disconnect'}
+            Connect Facebook Page
           </Button>
-        </Box>
-      ) : (
-        <Button
-          variant="contained"
-          onClick={handleConnect}
-          disabled={connecting}
-          startIcon={
-            connecting ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : (
-              <Box sx={{ width: 16, height: 16, borderRadius: '4px', bgcolor: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Box component="svg" viewBox="0 0 24 24" sx={{ width: 10, height: 10, fill: '#1877F2' }}>
-                  <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.93-1.956 1.886v2.288h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>
-                </Box>
-              </Box>
-            )
-          }
-          sx={{ bgcolor: '#1877F2', '&:hover': { bgcolor: '#1464d0' }, fontWeight: 700, fontSize: '0.78rem', textDecoration: 'none' }}
-        >
-          Connect Facebook Page
-        </Button>
-      )}
-    </Box>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -3589,21 +3607,14 @@ function IngestPointsPanel({ token, tenantId }) {
 
   function fetchPoints() {
     setLoading(true)
-    // Fetch all formats in parallel and merge
-    Promise.all(
-      INGEST_POINT_FORMATS.map(f =>
-        fetch(`/api/ingest-points?ingest_format=${f.value}`, { headers: authHeader(token, tenantId) })
-          .then(r => r.ok ? r.json() : { ingest_points: [] })
-          .then(d => d.ingest_points || [])
-          .catch(() => [])
-      )
-    ).then(results => {
-      // Deduplicate by id (some ingest points may appear in multiple format queries)
-      const seen = new Set()
-      const all  = results.flat().filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true })
-      all.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-      setPoints(all)
-    }).finally(() => setLoading(false))
+    // Single request — the backend merges all formats via spaced-out
+    // sequential JW calls instead of firing 4 parallel ones from here,
+    // which was tripping JW's 60/min rate limit.
+    fetch('/api/ingest-points?all=1', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : { ingest_points: [] })
+      .then(d => setPoints(d.ingest_points || []))
+      .catch(() => setPoints([]))
+      .finally(() => setLoading(false))
   }
 
   async function handleCreate() {
@@ -3969,45 +3980,65 @@ function CdnReadOnlyPanel({ records = [], channels = [], pricing, tournaments = 
   )
 }
 
-// ─── JW Player config (per-tenant) ────────────────────────────────────────────
+// ─── Tenant config (JW Player + BrightSpot share the /api/tenant record) ──────
 
-function JwPlayerSettingsPanel({ token, tenantId }) {
+function useTenantSettings(token, tenantId) {
+  const [data, setData]       = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  const refetch = useCallback(() => {
+    setLoading(true)
+    return fetch('/api/tenant', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { setData(d); return d })
+      .catch(() => { setData(null); return null })
+      .finally(() => setLoading(false))
+  }, [token, tenantId])
+
+  useEffect(() => { refetch() }, [refetch])
+
+  async function save(patch) {
+    const res = await fetch('/api/tenant', {
+      method: 'PUT',
+      headers: authHeader(token, tenantId),
+      body: JSON.stringify(patch),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || 'Failed to save')
+    setData(json)
+    return json
+  }
+
+  return { data, loading, save }
+}
+
+function JwIcon({ size = 24 }) {
+  return (
+    <Box sx={{ width: size, height: size, borderRadius: '6px', bgcolor: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Typography sx={{ fontSize: size * 0.36, fontWeight: 900, color: '#fff', letterSpacing: '-0.03em', lineHeight: 1 }}>JW</Typography>
+    </Box>
+  )
+}
+
+function JwPlayerEditDialog({ open, onClose, tenant, tenantLoading, saveTenant }) {
   const [jwSiteId, setJwSiteId]       = useState('')
   const [jwApiSecret, setJwApiSecret] = useState('')
-  const [configured, setConfigured]   = useState(false)
-  const [loading, setLoading]         = useState(true)
   const [saving, setSaving]           = useState(false)
   const [saved, setSaved]             = useState(false)
   const [error, setError]             = useState('')
 
-  const fetchConfig = useCallback(() => {
-    setLoading(true)
-    fetch('/api/tenant', { headers: authHeader(token, tenantId) })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        setJwSiteId(data?.jw_site_id || '')
-        setJwApiSecret(data?.jw_api_secret || '')
-        setConfigured(!!data?.jw_site_id)
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [token, tenantId])
-
-  useEffect(() => { fetchConfig() }, [fetchConfig])
+  useEffect(() => {
+    if (!open) return
+    setJwSiteId(tenant?.jw_site_id || '')
+    setJwApiSecret(tenant?.jw_api_secret || '')
+    setError(''); setSaved(false)
+  }, [open, tenant])
 
   async function handleSave(e) {
     e.preventDefault()
     setSaving(true); setError(''); setSaved(false)
     try {
-      const body = { jw_site_id: jwSiteId.trim() || null, jw_api_secret: jwApiSecret.trim() || null }
-      const res = await fetch('/api/tenant', {
-        method: 'PUT',
-        headers: authHeader(token, tenantId),
-        body: JSON.stringify(body),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to save')
-      setConfigured(!!data.jw_site_id)
+      await saveTenant({ jw_site_id: jwSiteId.trim() || null, jw_api_secret: jwApiSecret.trim() || null })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
@@ -4018,30 +4049,33 @@ function JwPlayerSettingsPanel({ token, tenantId }) {
   }
 
   return (
-    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-        <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>JW Player</Typography>
-        <Chip label={configured ? 'Configured' : 'Not configured'} size="small"
-          sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700,
-            bgcolor: configured ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)',
-            color: configured ? '#10b981' : '#f59e0b' }} />
-      </Box>
-
-      {loading ? (
-        <CircularProgress size={20} sx={{ color: AP.accent }} />
-      ) : (
-        <Box component="form" onSubmit={handleSave} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxWidth: 480 }}>
-          {error && <Alert severity="error" sx={{ fontSize: '0.78rem' }}>{error}</Alert>}
-          <TextField size="small" label="JW Site ID" fullWidth value={jwSiteId} onChange={e => setJwSiteId(e.target.value)} />
-          <TextField size="small" label="JW API Secret" fullWidth
-            value={jwApiSecret} onChange={e => setJwApiSecret(e.target.value)} />
-          <Button type="submit" variant="contained" disabled={saving} size="small"
-            sx={{ alignSelf: 'flex-start', bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <JwIcon size={22} />
+        JW Player
+        <IconButton size="small" onClick={onClose} sx={{ ml: 'auto' }}><CloseIcon fontSize="small" /></IconButton>
+      </DialogTitle>
+      <Box component="form" onSubmit={handleSave}>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          {tenantLoading ? (
+            <CircularProgress size={20} sx={{ color: AP.accent }} />
+          ) : (
+            <>
+              {error && <Alert severity="error" sx={{ fontSize: '0.78rem' }}>{error}</Alert>}
+              <TextField size="small" label="JW Site ID" fullWidth autoFocus value={jwSiteId} onChange={e => setJwSiteId(e.target.value)} />
+              <TextField size="small" label="JW API Secret" fullWidth value={jwApiSecret} onChange={e => setJwApiSecret(e.target.value)} />
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={onClose} sx={{ color: AP.muted }}>Cancel</Button>
+          <Button type="submit" variant="contained" disabled={saving || tenantLoading}
+            sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
             {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : saved ? 'Saved' : 'Save'}
           </Button>
-        </Box>
-      )}
-    </Box>
+        </DialogActions>
+      </Box>
+    </Dialog>
   )
 }
 
@@ -4049,56 +4083,50 @@ function JwPlayerSettingsPanel({ token, tenantId }) {
 // Defaults point at Griffin's UAT BrightSpot instance (the environment this
 // integration was built/spiked against) so the fields aren't blank on first load.
 const BRIGHTSPOT_DEFAULTS = {
-  cmsUrl:  'https://cms.griffin-uat.lower.griffin-media.brightspot.cloud',
-  siteUrl: 'https://news9.griffin-uat.lower.griffin-media.brightspot.cloud',
-  apiKey:  'BIPiEDEezXTX6KJsgwN939PV4XwJyshyzZm2NXB',
+  cmsUrl:   'https://cms.griffin-uat.lower.griffin-media.brightspot.cloud',
+  siteUrl:  'https://news9.griffin-uat.lower.griffin-media.brightspot.cloud',
+  apiKey:   'BIPiEDEezXTX6KJsgwN939PV4XwJyshyzZm2NXB',
+  clientId: '',
 }
 
-function BrightSpotSettingsPanel({ token, tenantId }) {
-  const [cmsUrl, setCmsUrl]   = useState(BRIGHTSPOT_DEFAULTS.cmsUrl)
-  const [siteUrl, setSiteUrl] = useState(BRIGHTSPOT_DEFAULTS.siteUrl)
-  const [apiKey, setApiKey]   = useState(BRIGHTSPOT_DEFAULTS.apiKey)
-  const [configured, setConfigured] = useState(false)
-  const [loading, setLoading]   = useState(true)
-  const [saving, setSaving]     = useState(false)
-  const [saved, setSaved]       = useState(false)
-  const [error, setError]       = useState('')
-  const [testing, setTesting]   = useState(false)
+function BrightSpotIcon({ size = 24 }) {
+  return (
+    <Box sx={{ width: size, height: size, borderRadius: '6px', bgcolor: '#0ea5e9', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Typography sx={{ fontSize: size * 0.32, fontWeight: 900, color: '#fff', lineHeight: 1 }}>BS</Typography>
+    </Box>
+  )
+}
+
+function BrightSpotEditDialog({ open, onClose, tenant, tenantLoading, saveTenant, token, tenantId }) {
+  const [cmsUrl, setCmsUrl]     = useState(BRIGHTSPOT_DEFAULTS.cmsUrl)
+  const [siteUrl, setSiteUrl]   = useState(BRIGHTSPOT_DEFAULTS.siteUrl)
+  const [apiKey, setApiKey]     = useState(BRIGHTSPOT_DEFAULTS.apiKey)
+  const [clientId, setClientId] = useState(BRIGHTSPOT_DEFAULTS.clientId)
+  const [saving, setSaving]   = useState(false)
+  const [saved, setSaved]     = useState(false)
+  const [error, setError]     = useState('')
+  const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState(null) // { severity, message } | null
 
-  const fetchConfig = useCallback(() => {
-    setLoading(true)
-    fetch('/api/tenant', { headers: authHeader(token, tenantId) })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        setCmsUrl(data?.brightspot_cms_url || BRIGHTSPOT_DEFAULTS.cmsUrl)
-        setSiteUrl(data?.brightspot_site_url || BRIGHTSPOT_DEFAULTS.siteUrl)
-        setApiKey(data?.brightspot_api_key || BRIGHTSPOT_DEFAULTS.apiKey)
-        setConfigured(!!data?.brightspot_cms_url)
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [token, tenantId])
-
-  useEffect(() => { fetchConfig() }, [fetchConfig])
+  useEffect(() => {
+    if (!open) return
+    setCmsUrl(tenant?.brightspot_cms_url || BRIGHTSPOT_DEFAULTS.cmsUrl)
+    setSiteUrl(tenant?.brightspot_site_url || BRIGHTSPOT_DEFAULTS.siteUrl)
+    setApiKey(tenant?.brightspot_api_key || BRIGHTSPOT_DEFAULTS.apiKey)
+    setClientId(tenant?.brightspot_client_id || BRIGHTSPOT_DEFAULTS.clientId)
+    setError(''); setSaved(false); setTestResult(null)
+  }, [open, tenant])
 
   async function handleSave(e) {
     e.preventDefault()
     setSaving(true); setError(''); setSaved(false)
     try {
-      const body = {
-        brightspot_cms_url:  cmsUrl.trim() || null,
-        brightspot_site_url: siteUrl.trim() || null,
-        brightspot_api_key:  apiKey.trim() || null,
-      }
-      const res = await fetch('/api/tenant', {
-        method: 'PUT',
-        headers: authHeader(token, tenantId),
-        body: JSON.stringify(body),
+      await saveTenant({
+        brightspot_cms_url:   cmsUrl.trim() || null,
+        brightspot_site_url:  siteUrl.trim() || null,
+        brightspot_api_key:   apiKey.trim() || null,
+        brightspot_client_id: clientId.trim() || null,
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to save')
-      setConfigured(!!data.brightspot_cms_url)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
@@ -4138,38 +4166,180 @@ function BrightSpotSettingsPanel({ token, tenantId }) {
   }
 
   return (
-    <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)', p: 2.5 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-        <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>BrightSpot CMS</Typography>
-        <Chip label={configured ? 'Configured' : 'Not configured'} size="small"
-          sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700,
-            bgcolor: configured ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)',
-            color: configured ? '#10b981' : '#f59e0b' }} />
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <BrightSpotIcon size={22} />
+        BrightSpot CMS
+        <IconButton size="small" onClick={onClose} sx={{ ml: 'auto' }}><CloseIcon fontSize="small" /></IconButton>
+      </DialogTitle>
+      <Box component="form" onSubmit={handleSave}>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          {tenantLoading ? (
+            <CircularProgress size={20} sx={{ color: AP.accent }} />
+          ) : (
+            <>
+              {error && <Alert severity="error" sx={{ fontSize: '0.78rem' }}>{error}</Alert>}
+              {testResult && <Alert severity={testResult.severity} sx={{ fontSize: '0.78rem', wordBreak: 'break-word' }}>{testResult.message}</Alert>}
+              <TextField size="small" label="CMS URL" fullWidth autoFocus value={cmsUrl} onChange={e => setCmsUrl(e.target.value)} />
+              <TextField size="small" label="Site URL (optional)" fullWidth value={siteUrl} onChange={e => setSiteUrl(e.target.value)}
+                helperText="Your BrightSpot publication or delivery URL" />
+              <TextField size="small" type="password" label="API Key" fullWidth value={apiKey} onChange={e => setApiKey(e.target.value)} />
+              <TextField size="small" label="Client ID" fullWidth value={clientId} onChange={e => setClientId(e.target.value)}
+                helperText="REST Management API client ID — used for encoder page search/publish" />
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button variant="outlined" size="small" onClick={handleTest} disabled={testing || tenantLoading}
+            sx={{ borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent, bgcolor: AP.accentDim } }}>
+            {testing ? <CircularProgress size={16} sx={{ color: AP.accent }} /> : 'Test Connection'}
+          </Button>
+          <Box sx={{ flex: 1 }} />
+          <Button onClick={onClose} sx={{ color: AP.muted }}>Cancel</Button>
+          <Button type="submit" variant="contained" disabled={saving || tenantLoading}
+            sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
+            {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : saved ? 'Saved' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Box>
+    </Dialog>
+  )
+}
+
+// ─── Integrations: compact tile list + "Add Integration" picker modal ─────────
+
+function IntegrationTile({ icon, name, description, statusLabel, statusColor, onClick }) {
+  return (
+    <Box
+      onClick={onClick}
+      sx={{
+        display: 'flex', alignItems: 'center', gap: 1.5, p: 2, cursor: 'pointer',
+        border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)',
+        transition: 'border-color 0.15s ease, background-color 0.15s ease',
+        '&:hover': { borderColor: AP.accentBdr, bgcolor: 'rgba(255,255,255,0.03)' },
+      }}
+    >
+      {icon}
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography sx={{ fontWeight: 700, fontSize: '0.86rem', color: '#fff' }}>{name}</Typography>
+        <Typography sx={{ fontSize: '0.68rem', color: AP.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {description}
+        </Typography>
+      </Box>
+      <Chip label={statusLabel} size="small"
+        sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0, maxWidth: 140,
+          bgcolor: `${statusColor}1f`, color: statusColor }} />
+      <ChevronRightIcon sx={{ color: AP.muted, fontSize: 18, flexShrink: 0 }} />
+    </Box>
+  )
+}
+
+function IntegrationPickerDialog({ open, onClose, items, onSelect }) {
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center' }}>
+        Add Integration
+        <IconButton size="small" onClick={onClose} sx={{ ml: 'auto' }}><CloseIcon fontSize="small" /></IconButton>
+      </DialogTitle>
+      <DialogContent>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5, pb: 1 }}>
+          {items.map(item => (
+            <Box key={item.id} onClick={() => onSelect(item.id)}
+              sx={{
+                position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
+                p: 2, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2,
+                '&:hover': { borderColor: AP.accentBdr, bgcolor: 'rgba(255,255,255,0.03)' },
+              }}
+            >
+              {item.configured && (
+                <CheckCircleIcon sx={{ position: 'absolute', top: 6, right: 6, fontSize: 16, color: AP.live }} />
+              )}
+              {item.icon}
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#fff', textAlign: 'center' }}>{item.name}</Typography>
+            </Box>
+          ))}
+        </Box>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function IntegrationsPanel({ token, tenantId }) {
+  const { data: tenant, loading: tenantLoading, save: saveTenant } = useTenantSettings(token, tenantId)
+  const youtube  = useYoutubeIntegration(token, tenantId)
+  const facebook = useFacebookIntegration(token, tenantId)
+
+  const [openKey, setOpenKey]       = useState(null) // null | 'jw' | 'youtube' | 'facebook' | 'brightspot'
+  const [pickerOpen, setPickerOpen] = useState(false)
+
+  const items = [
+    {
+      id: 'jw', name: 'JW Player', description: 'Video hosting & clip delivery', icon: <JwIcon />,
+      configured: !!tenant?.jw_site_id,
+      statusLabel: tenantLoading ? '…' : tenant?.jw_site_id ? 'Configured' : 'Not configured',
+      statusColor: tenant?.jw_site_id ? AP.live : AP.warn,
+    },
+    {
+      id: 'youtube', name: 'YouTube', description: 'Simulcast to your YouTube channel',
+      icon: <Box component="img" src={YOUTUBE_ICON_URL} sx={{ width: 24, height: 24 }} />,
+      configured: !!youtube.status?.connected,
+      statusLabel: youtube.loading ? '…' : youtube.status?.connected ? (youtube.status.channel_name || 'Connected') : 'Not connected',
+      statusColor: youtube.status?.connected ? AP.live : AP.warn,
+    },
+    {
+      id: 'facebook', name: 'Facebook', description: 'Simulcast to your Facebook Page', icon: <FacebookIcon />,
+      configured: !!facebook.status?.connected,
+      statusLabel: facebook.loading ? '…' : facebook.status?.connected ? (facebook.status.page_name || 'Connected') : 'Not connected',
+      statusColor: facebook.status?.connected ? AP.live : AP.warn,
+    },
+    {
+      id: 'brightspot', name: 'BrightSpot CMS', description: 'Publish clips & alerts to your CMS', icon: <BrightSpotIcon />,
+      configured: !!tenant?.brightspot_cms_url,
+      statusLabel: tenantLoading ? '…' : tenant?.brightspot_cms_url ? 'Configured' : 'Not configured',
+      statusColor: tenant?.brightspot_cms_url ? AP.live : AP.warn,
+    },
+  ]
+
+  return (
+    <>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.1em', color: AP.muted, textTransform: 'uppercase' }}>Integrations</Typography>
+        <Button size="small" startIcon={<AddIcon sx={{ fontSize: 16 }} />} onClick={() => setPickerOpen(true)}
+          sx={{ fontSize: '0.72rem', color: AP.accent, minWidth: 0, p: '2px 8px' }}>
+          Add
+        </Button>
       </Box>
 
-      {loading ? (
-        <CircularProgress size={20} sx={{ color: AP.accent }} />
-      ) : (
-        <Box component="form" onSubmit={handleSave} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxWidth: 480 }}>
-          {error && <Alert severity="error" sx={{ fontSize: '0.78rem' }}>{error}</Alert>}
-          {testResult && <Alert severity={testResult.severity} sx={{ fontSize: '0.78rem', wordBreak: 'break-word' }}>{testResult.message}</Alert>}
-          <TextField size="small" label="CMS URL" fullWidth value={cmsUrl} onChange={e => setCmsUrl(e.target.value)} />
-          <TextField size="small" label="Site URL (optional)" fullWidth value={siteUrl} onChange={e => setSiteUrl(e.target.value)}
-            helperText="Your BrightSpot publication or delivery URL" />
-          <TextField size="small" type="password" label="API Key" fullWidth value={apiKey} onChange={e => setApiKey(e.target.value)} />
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button variant="outlined" size="small" onClick={handleTest} disabled={testing}
-              sx={{ borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent, bgcolor: AP.accentDim } }}>
-              {testing ? <CircularProgress size={16} sx={{ color: AP.accent }} /> : 'Test Connection'}
-            </Button>
-            <Button type="submit" variant="contained" disabled={saving} size="small"
-              sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
-              {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : saved ? 'Saved' : 'Save'}
-            </Button>
-          </Box>
-        </Box>
-      )}
-    </Box>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {items.filter(item => item.configured).map(item => (
+          <IntegrationTile key={item.id} {...item} onClick={() => setOpenKey(item.id)} />
+        ))}
+        {items.every(item => !item.configured) && !tenantLoading && (
+          <Typography sx={{ fontSize: '0.78rem', color: AP.muted, fontStyle: 'italic', py: 1 }}>
+            No integrations added yet — click Add to connect one.
+          </Typography>
+        )}
+      </Box>
+
+      <IntegrationPickerDialog
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        items={items}
+        onSelect={key => { setPickerOpen(false); setOpenKey(key) }}
+      />
+
+      <JwPlayerEditDialog
+        open={openKey === 'jw'} onClose={() => setOpenKey(null)}
+        tenant={tenant} tenantLoading={tenantLoading} saveTenant={saveTenant}
+      />
+      <BrightSpotEditDialog
+        open={openKey === 'brightspot'} onClose={() => setOpenKey(null)}
+        tenant={tenant} tenantLoading={tenantLoading} saveTenant={saveTenant}
+        token={token} tenantId={tenantId}
+      />
+      <YouTubeEditDialog open={openKey === 'youtube'} onClose={() => setOpenKey(null)} integration={youtube} />
+      <FacebookEditDialog open={openKey === 'facebook'} onClose={() => setOpenKey(null)} integration={facebook} />
+    </>
   )
 }
 
@@ -4472,8 +4642,15 @@ function TenantsPanel({ token }) {
             <>
               <TextField size="small" label="Name" fullWidth value={editTenant.name}
                 onChange={e => setEditTenant({ ...editTenant, name: e.target.value })} />
-              <TextField size="small" label="Timezone" fullWidth value={editTenant.timezone}
-                onChange={e => setEditTenant({ ...editTenant, timezone: e.target.value })} />
+              <TextField
+                select size="small" label="Timezone" fullWidth
+                value={editTenant.timezone || 'America/New_York'}
+                onChange={e => setEditTenant({ ...editTenant, timezone: e.target.value })}
+              >
+                {TIMEZONE_OPTIONS.map(opt => (
+                  <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                ))}
+              </TextField>
               <Typography sx={{ fontSize: '0.68rem', color: AP.muted }}>
                 JW Player credentials are managed from the tenant's own Settings page, not here.
               </Typography>
@@ -4600,6 +4777,7 @@ const PATH_MAP = {
   '/admin/streams':     { activeTab: 'dashboard',    dashboardView: 'streams' },
   '/admin/events':      { activeTab: 'dashboard',    dashboardView: 'events'  },
   '/admin/encoders':    { activeTab: 'encoders',     dashboardView: 'streams' },
+  '/admin/routers':     { activeTab: 'routers',      dashboardView: 'streams' },
   '/admin/costs':       { activeTab: 'costs',        dashboardView: 'streams' },
   '/admin/settings':    { activeTab: 'settings',     dashboardView: 'streams' },
   '/admin/tenants':     { activeTab: 'tenants',      dashboardView: 'streams' },
@@ -4609,6 +4787,7 @@ const PATH_MAP = {
 function tabToPath(tab, view) {
   if (tab === 'dashboard')   return view === 'events' ? '/admin/events' : '/admin/streams'
   if (tab === 'encoders')    return '/admin/encoders'
+  if (tab === 'routers')     return '/admin/routers'
   if (tab === 'costs')       return '/admin/costs'
   if (tab === 'settings')    return '/admin/settings'
   if (tab === 'tenants')     return '/admin/tenants'
@@ -4989,6 +5168,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
     { section: 'MANAGEMENT', items: [
       { label: 'Live Streams',    tab: 'dashboard', view: 'streams', count: channels.length },
       { label: 'Encoders',        tab: 'encoders',  view: null },
+      { label: 'Routers',         tab: 'routers',   view: null },
     ]},
     ...(isReadOnly ? [] : [{ section: 'SYSTEM', items: [
       { label: 'Settings', tab: 'settings', view: null },
@@ -5369,22 +5549,6 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                 {/* ── Rows ── */}
                 <Box>
                     {(() => {
-                      // ── Status label + color config ──────────────────────────
-                      const STATUS_CFG = {
-                        active:     { label: 'Live',       bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
-                        streaming:  { label: 'Live',       bg: 'rgba(16,185,129,0.15)',  color: '#10b981', border: 'rgba(16,185,129,0.4)'  },
-                        requested:  { label: 'Scheduled',  bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
-                        scheduled:  { label: 'Scheduled',  bg: 'rgba(99,102,241,0.15)',  color: '#818cf8', border: 'rgba(99,102,241,0.4)'  },
-                        creating:   { label: 'Creating',   bg: 'rgba(245,158,11,0.15)',  color: '#f59e0b', border: 'rgba(245,158,11,0.4)'  },
-                        starting:   { label: 'Starting',   bg: 'rgba(56,189,248,0.12)',  color: '#38bdf8', border: 'rgba(56,189,248,0.35)' },
-                        ready:      { label: 'Ready',      bg: 'rgba(87,187,149,0.15)',  color: '#57BB95', border: 'rgba(87,187,149,0.4)'  },
-                        idle:       { label: 'Past Event', bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
-                        idle_247:   { label: 'Idle',       bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.4)' },
-                        stopping:   { label: 'Stopping',   bg: 'rgba(239,68,68,0.12)',   color: '#f87171', border: 'rgba(239,68,68,0.35)'  },
-                        destroying: { label: 'Destroying', bg: 'rgba(245,158,11,0.1)',   color: '#f59e0b', border: 'rgba(245,158,11,0.35)' },
-                        deleting:   { label: 'Deleting',   bg: 'rgba(245,158,11,0.1)',   color: '#f59e0b', border: 'rgba(245,158,11,0.35)' },
-                      }
-
                       // ── Sort helper (newest first) ───────────────────────────
                       const sortByStart = (a, b) => {
                         if (!a.stream_start && !b.stream_start) return (a.name || '').localeCompare(b.name || '')
@@ -5525,10 +5689,8 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
 
                       return visibleChannels.map(ch => {
                         const s = ch.status?.toLowerCase()
-                        const cfgKey = (s === 'idle' || !STATUS_CFG[s])
-                          ? (ch.stream_type === '24/7' ? 'idle_247' : resolveIdleStatus(ch) === 'upcoming' ? 'scheduled' : 'idle')
-                          : s
-                        const cfg          = STATUS_CFG[cfgKey] || STATUS_CFG.idle
+                        const cfg          = getStatusDisplay(ch)
+                        const cfgKey       = cfg.key
                         const spinupStatus = getSpinupStatus(ch)
                         const isLiveNow    = s === 'active' || s === 'streaming'
                         const is247        = ch.stream_type === '24/7'
@@ -5700,6 +5862,19 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
             </Box>
           )}
 
+          {activeTab === 'routers' && (
+            <Box sx={{ p: { xs: 1, sm: 2 } }}>
+              <Box sx={{
+                border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, bgcolor: 'rgba(0,0,0,0.2)',
+                p: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5,
+              }}>
+                <RouterIcon sx={{ fontSize: 32, color: AP.muted }} />
+                <Typography sx={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff' }}>Routers</Typography>
+                <Typography sx={{ fontSize: '0.8rem', color: AP.muted, fontStyle: 'italic' }}>Coming soon</Typography>
+              </Box>
+            </Box>
+          )}
+
           {activeTab === 'costs' && isSuperAdmin && (
             <Box sx={{ p: { xs: 1, sm: 2 }, pb: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
               <CostsPage
@@ -5723,11 +5898,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' }, gap: 2, alignItems: 'start' }}>
 
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.1em', color: AP.muted, textTransform: 'uppercase' }}>Integrations</Typography>
-                  <JwPlayerSettingsPanel    token={token} tenantId={tenantId} />
-                  <YouTubeIntegrationPanel  token={token} tenantId={tenantId} />
-                  <FacebookIntegrationPanel token={token} tenantId={tenantId} />
-                  <BrightSpotSettingsPanel  token={token} tenantId={tenantId} />
+                  <IntegrationsPanel token={token} tenantId={tenantId} />
                 </Box>
 
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
