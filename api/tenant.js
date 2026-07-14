@@ -63,6 +63,7 @@ export default async function handler(req, res) {
       publicTenant.brightspot_cms_url   = tenant.brightspot_cms_url   || null
       publicTenant.brightspot_site_url  = tenant.brightspot_site_url  || null
       publicTenant.brightspot_api_key   = tenant.brightspot_api_key   || null
+      publicTenant.brightspot_client_id = tenant.brightspot_client_id || null
     }
 
     return res.status(200).json(publicTenant)

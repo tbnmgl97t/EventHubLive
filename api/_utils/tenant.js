@@ -101,3 +101,19 @@ export async function getTenantJwCreds(tenantId) {
   if (!data?.jw_site_id || !data?.jw_api_secret) return null
   return { siteId: data.jw_site_id, apiSecret: data.jw_api_secret }
 }
+
+/** Fetches a tenant's BrightSpot credentials, or null if not fully configured yet. */
+export async function getTenantBrightspotCreds(tenantId) {
+  const { data } = await supabase
+    .from('tenants')
+    .select('brightspot_cms_url, brightspot_site_url, brightspot_api_key, brightspot_client_id')
+    .eq('id', tenantId)
+    .single()
+  if (!data?.brightspot_client_id || !data?.brightspot_api_key || !(data?.brightspot_site_url || data?.brightspot_cms_url)) return null
+  return {
+    cmsUrl:    data.brightspot_cms_url  || null,
+    siteUrl:   data.brightspot_site_url || null,
+    apiKey:    data.brightspot_api_key,
+    clientId:  data.brightspot_client_id,
+  }
+}

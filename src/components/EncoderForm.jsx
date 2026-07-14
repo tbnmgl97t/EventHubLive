@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Box, Typography, TextField, Button, CircularProgress, Alert, MenuItem,
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Switch, Checkbox,
-  useTheme, useMediaQuery,
+  Autocomplete, useTheme, useMediaQuery,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
@@ -52,6 +52,8 @@ const EMPTY_FORM = {
   simulcast_website: true, simulcast_youtube: false, simulcast_facebook: false, simulcast_app: false,
   vod_recording: true, youtube_broadcast_id: '',
   youtube_ingest_url: '', youtube_stream_key: '',
+  brightspot_page_id: '', brightspot_page_name: '',
+  brightspot_video_page_id: '', brightspot_video_page_name: '',
 }
 
 function ToggleRow({ label, hint, checked, onChange, color = AP.accent, disabled }) {
@@ -82,6 +84,85 @@ function ToggleRow({ label, hint, checked, onChange, color = AP.accent, disabled
   )
 }
 
+// ── BrightSpot page picker ──
+// Search dropdown backed by /api/brightspot-search-pages, with a manual
+// id/name fallback since BrightSpot search isn't available yet (see that
+// endpoint's comments) — flipping "Search instead" back on once it works
+// needs no further frontend changes.
+function BrightSpotPagePicker({ label, kind, idValue, nameValue, onSelect, token, tenantId }) {
+  const [manualMode, setManualMode] = useState(!!idValue)
+  const [query, setQuery]     = useState('')
+  const [options, setOptions] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [unavailable, setUnavailable] = useState(false)
+  const debounceRef = useRef(null)
+
+  useEffect(() => {
+    if (manualMode) return
+    clearTimeout(debounceRef.current)
+    if (!query.trim()) { setOptions([]); return }
+    debounceRef.current = setTimeout(() => {
+      setLoading(true)
+      fetch(`/api/brightspot-search-pages?q=${encodeURIComponent(query.trim())}&kind=${kind}`, { headers: authHeader(token, tenantId) })
+        .then(r => r.json())
+        .then(data => {
+          setUnavailable(data.available === false)
+          setOptions(data.pages || [])
+        })
+        .catch(() => { setOptions([]); setUnavailable(true) })
+        .finally(() => setLoading(false))
+    }, 350)
+    return () => clearTimeout(debounceRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, manualMode])
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1' }}>
+          {label.toUpperCase()}
+        </Typography>
+        <Button size="small" onClick={() => setManualMode(m => !m)}
+          sx={{ fontSize: '0.68rem', color: AP.accent, textTransform: 'none', p: 0, minWidth: 0 }}>
+          {manualMode ? 'Search instead' : 'Enter manually'}
+        </Button>
+      </Box>
+      {manualMode ? (
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5 }}>
+          <TextField
+            size="small" label={`${label} ID`} fullWidth
+            value={idValue} onChange={e => onSelect(e.target.value, nameValue)}
+            placeholder="BrightSpot content ID"
+          />
+          <TextField
+            size="small" label={`${label} Name`} fullWidth
+            value={nameValue || ''} onChange={e => onSelect(idValue, e.target.value)}
+            placeholder="Display name"
+          />
+        </Box>
+      ) : (
+        <Autocomplete
+          size="small" fullWidth
+          options={options}
+          loading={loading}
+          filterOptions={x => x}
+          getOptionLabel={opt => (typeof opt === 'string' ? opt : (opt.name || opt.id || ''))}
+          isOptionEqualToValue={(opt, val) => opt.id === val?.id}
+          value={idValue ? { id: idValue, name: nameValue || idValue } : null}
+          onInputChange={(e, val) => setQuery(val)}
+          onChange={(e, val) => onSelect(val?.id || '', val?.name || '')}
+          noOptionsText={unavailable ? 'BrightSpot search not available yet' : (query ? 'No matches' : 'Type to search…')}
+          renderInput={params => (
+            <TextField {...params} placeholder={`Search ${label.toLowerCase()}…`}
+              helperText={unavailable ? 'Search unavailable — use "Enter manually" for now' : undefined}
+            />
+          )}
+        />
+      )}
+    </Box>
+  )
+}
+
 export default function EncoderForm({ token, tenantId, mode }) {
   const navigate = useNavigate()
   const { id } = useParams()
@@ -97,10 +178,13 @@ export default function EncoderForm({ token, tenantId, mode }) {
 
   const [youtubeConnected, setYoutubeConnected]   = useState(false)
   const [facebookConnected, setFacebookConnected] = useState(false)
+  const [brightspotConfigured, setBrightspotConfigured] = useState(false)
+  const [brightspotStatusLoaded, setBrightspotStatusLoaded] = useState(false)
+  const [orphanedPagesDismissed, setOrphanedPagesDismissed] = useState(false)
 
   const [channels, setChannels] = useState([])
   const [channelsLoading, setChannelsLoading] = useState(false)
-  const [manualChannel, setManualChannel] = useState(false)
+  const [manualChannel, setManualChannel] = useState(null) // null = auto-detect; true/false = explicit user override
   const [ingestLookupLoading, setIngestLookupLoading] = useState(false)
   const [ingestLookupError, setIngestLookupError] = useState('')
 
@@ -180,6 +264,13 @@ export default function EncoderForm({ token, tenantId, mode }) {
       .then(r => r.ok ? r.json() : null)
       .then(data => setFacebookConnected(!!data?.connected))
       .catch(() => setFacebookConnected(false))
+    // Same "configured" check the Settings > Integrations panel uses —
+    // only show BrightSpot page assignment once the tenant has it set up.
+    fetch('/api/tenant', { headers: authHeader(token, tenantId) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setBrightspotConfigured(!!data?.brightspot_cms_url))
+      .catch(() => setBrightspotConfigured(false))
+      .finally(() => setBrightspotStatusLoaded(true))
   }, [token, tenantId])
 
   useEffect(() => {
@@ -203,7 +294,7 @@ export default function EncoderForm({ token, tenantId, mode }) {
     setSaving(true)
     setError('')
     try {
-      let ytBroadcastId  = form.youtube_broadcast_id?.trim() || null
+      let ytBroadcastId  = channelYoutubeBroadcastId || form.youtube_broadcast_id?.trim() || null
       let ytIngestUrl    = form.youtube_ingest_url || null
       let ytStreamKey    = form.youtube_stream_key || null
 
@@ -247,6 +338,10 @@ export default function EncoderForm({ token, tenantId, mode }) {
         youtube_broadcast_id: ytBroadcastId,
         youtube_ingest_url: ytIngestUrl,
         youtube_stream_key: ytStreamKey,
+        brightspot_page_id: form.brightspot_page_id?.trim() || null,
+        brightspot_page_name: form.brightspot_page_name?.trim() || null,
+        brightspot_video_page_id: form.brightspot_video_page_id?.trim() || null,
+        brightspot_video_page_name: form.brightspot_video_page_name?.trim() || null,
       }
       const res = await fetch('/api/encoders', {
         method: isEdit ? 'PATCH' : 'POST',
@@ -265,7 +360,33 @@ export default function EncoderForm({ token, tenantId, mode }) {
 
   const isValid = form.name.trim() && form.channel_id.trim() && (!isEdit || confirmChange)
   const channelKnown = channels.some(c => c.id === form.channel_id)
-  const manualChannelMode = manualChannel || (!channelsLoading && !!form.channel_id && !channelKnown)
+  // If the assigned channel already has its own persistent YouTube broadcast
+  // (created when the channel/stream itself was set up with simulcast on),
+  // the encoder should just reuse that broadcast's ID for privacy toggling
+  // rather than creating or asking for a separate one.
+  const channelYoutubeBroadcastId = channels.find(c => c.id === form.channel_id)?.youtube_broadcast_id || null
+  // An explicit click on the toggle button always wins; otherwise auto-detect
+  // manual mode when the assigned channel isn't in JW's known channel list.
+  const manualChannelMode = manualChannel !== null
+    ? manualChannel
+    : (!channelsLoading && !!form.channel_id && !channelKnown)
+
+  // Encoder still has BrightSpot page ids from before the integration was
+  // disconnected — surface it rather than silently clearing (see
+  // getEncoderBrightspotPages in api/_utils/brightspot.js for the matching
+  // guard on the orchestration side, which never uses these unless
+  // BrightSpot is actually configured right now).
+  const hasOrphanedPages = brightspotStatusLoaded && !brightspotConfigured && !orphanedPagesDismissed &&
+    !!(form.brightspot_page_id || form.brightspot_video_page_id)
+
+  function clearBrightspotPages() {
+    setForm(prev => ({
+      ...prev,
+      brightspot_page_id: '', brightspot_page_name: '',
+      brightspot_video_page_id: '', brightspot_video_page_name: '',
+    }))
+    setOrphanedPagesDismissed(true)
+  }
 
   return (
     <Dialog open onClose={handleClose} fullWidth maxWidth="sm" fullScreen={fullScreen}
@@ -322,109 +443,155 @@ export default function EncoderForm({ token, tenantId, mode }) {
               placeholder="Optional notes about this encoder's location or purpose"
             />
 
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.5 }}>
-              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1' }}>
-                ASSIGNED 24/7 CHANNEL
-              </Typography>
-              <Button
-                size="small" onClick={() => setManualChannel(m => !m)}
-                sx={{ fontSize: '0.68rem', color: AP.accent, textTransform: 'none', p: 0, minWidth: 0 }}
+            {hasOrphanedPages && (
+              <Alert
+                severity="warning" sx={{ fontSize: '0.78rem' }}
+                onClose={() => setOrphanedPagesDismissed(true)}
+                action={
+                  <Button size="small" onClick={clearBrightspotPages} sx={{ fontSize: '0.7rem' }}>
+                    Clear
+                  </Button>
+                }
               >
-                {manualChannelMode ? 'Select from list instead' : 'Enter channel ID manually'}
-              </Button>
-            </Box>
-            {manualChannelMode ? (
-              <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5 }}>
-                <TextField
-                  size="small" label="Channel ID" required fullWidth
-                  value={form.channel_id} onChange={e => set('channel_id', e.target.value)}
-                  placeholder="JW channel/stream ID"
-                />
-                <TextField
-                  size="small" label="Channel Name" fullWidth
-                  value={form.channel_name || ''} onChange={e => set('channel_name', e.target.value)}
-                  placeholder="Display name"
-                />
-              </Box>
-            ) : (
-              <TextField
-                select size="small" label="Channel" required fullWidth
-                value={channels.some(c => c.id === form.channel_id) ? form.channel_id : ''}
-                onChange={e => {
-                  const ch = channels.find(c => c.id === e.target.value)
-                  setForm(prev => ({
-                    ...prev,
-                    channel_id: e.target.value,
-                    channel_name: ch?.name || '',
-                    ingest_url: ch?.ingest_url || prev.ingest_url,
-                    stream_key: ch?.ingest_key || prev.stream_key,
-                  }))
-                }}
-                disabled={channelsLoading}
-                helperText={channelsLoading ? 'Loading 24/7 channels…' : (channels.length === 0 ? 'No 24/7 channels found — enter one manually' : undefined)}
-              >
-                {channels.map(c => (
-                  <MenuItem key={c.id} value={c.id}>{c.name || c.id} ({c.id.slice(0, 8)}…)</MenuItem>
-                ))}
-              </TextField>
-            )}
-
-            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5 }}>
-              <TextField
-                select size="small" label="Ingest Format" fullWidth
-                value={form.ingest_format} onChange={e => set('ingest_format', e.target.value)}
-              >
-                {INGEST_FORMATS.map(f => <MenuItem key={f.value} value={f.value}>{f.label}</MenuItem>)}
-              </TextField>
-              <TextField
-                select size="small" label="Region" fullWidth
-                value={form.region} onChange={e => set('region', e.target.value)}
-              >
-                {REGIONS.map(r => <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>)}
-              </TextField>
-            </Box>
-
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.5 }}>
-              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1' }}>
-                HARDWARE ENCODER CONFIG
-              </Typography>
-              <Button
-                size="small" onClick={() => lookupIngestDetails(form.channel_id)}
-                disabled={!form.channel_id || ingestLookupLoading}
-                startIcon={ingestLookupLoading ? <CircularProgress size={12} sx={{ color: 'inherit' }} /> : <RefreshIcon sx={{ fontSize: 14 }} />}
-                sx={{ fontSize: '0.68rem', color: AP.accent, textTransform: 'none', p: 0, minWidth: 0 }}
-              >
-                Refresh from channel
-              </Button>
-            </Box>
-            {ingestLookupError && (
-              <Alert severity="warning" sx={{ fontSize: '0.75rem' }} onClose={() => setIngestLookupError('')}>
-                {ingestLookupError}
+                BrightSpot integration is disabled — this encoder's assigned pages won't be used until it's reconnected.
               </Alert>
             )}
-            <TextField
-              size="small" label="JW Ingest URL" fullWidth
-              value={form.ingest_url || ''} onChange={e => set('ingest_url', e.target.value)}
-              placeholder="The URL your operator enters into the hardware encoder"
-              helperText={ingestLookupLoading ? 'Looking up ingest details…' : undefined}
-            />
-            <TextField
-              size="small" label="JW Stream Key" fullWidth
-              value={form.stream_key || ''} onChange={e => set('stream_key', e.target.value)}
-            />
-            {(form.youtube_ingest_url || form.youtube_stream_key) && (
-              <>
-                <TextField
-                  size="small" label="YouTube Ingest URL" fullWidth disabled
-                  value={form.youtube_ingest_url || ''}
-                  helperText="Enter this as a second output on your hardware encoder to simulcast to YouTube"
+
+            {brightspotConfigured && (
+              <Box sx={{
+                border: '1px solid rgba(255,255,255,0.08)', borderRadius: 1.5, p: 1.5, bgcolor: 'rgba(0,0,0,0.2)', mt: 0.5,
+                display: 'flex', flexDirection: 'column', gap: 1.5,
+              }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1' }}>
+                  BRIGHTSPOT PAGES
+                </Typography>
+                <BrightSpotPagePicker
+                  label="Encoder Page" kind="page"
+                  idValue={form.brightspot_page_id} nameValue={form.brightspot_page_name}
+                  onSelect={(id, name) => setForm(prev => ({ ...prev, brightspot_page_id: id, brightspot_page_name: name }))}
+                  token={token} tenantId={tenantId}
                 />
-                <TextField
-                  size="small" label="YouTube Stream Key" fullWidth disabled
-                  value={form.youtube_stream_key || ''}
+                <BrightSpotPagePicker
+                  label="Encoder Video Page" kind="video"
+                  idValue={form.brightspot_video_page_id} nameValue={form.brightspot_video_page_name}
+                  onSelect={(id, name) => setForm(prev => ({ ...prev, brightspot_video_page_id: id, brightspot_video_page_name: name }))}
+                  token={token} tenantId={tenantId}
                 />
-              </>
+              </Box>
             )}
+
+            <Box sx={{
+              border: '1px solid rgba(255,255,255,0.08)', borderRadius: 1.5, p: 1.5, bgcolor: 'rgba(0,0,0,0.2)',
+              display: 'flex', flexDirection: 'column', gap: 1.5,
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1' }}>
+                  ASSIGNED 24/7 CHANNEL
+                </Typography>
+                <Button
+                  size="small" onClick={() => setManualChannel(!manualChannelMode)}
+                  sx={{ fontSize: '0.68rem', color: AP.accent, textTransform: 'none', p: 0, minWidth: 0 }}
+                >
+                  {manualChannelMode ? 'Select from list instead' : 'Enter channel ID manually'}
+                </Button>
+              </Box>
+              {manualChannelMode ? (
+                <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5 }}>
+                  <TextField
+                    size="small" label="Channel ID" required fullWidth
+                    value={form.channel_id} onChange={e => set('channel_id', e.target.value)}
+                    placeholder="JW channel/stream ID"
+                  />
+                  <TextField
+                    size="small" label="Channel Name" fullWidth
+                    value={form.channel_name || ''} onChange={e => set('channel_name', e.target.value)}
+                    placeholder="Display name"
+                  />
+                </Box>
+              ) : (
+                <TextField
+                  select size="small" label="Channel" required fullWidth
+                  value={channels.some(c => c.id === form.channel_id) ? form.channel_id : ''}
+                  onChange={e => {
+                    const ch = channels.find(c => c.id === e.target.value)
+                    setForm(prev => ({
+                      ...prev,
+                      channel_id: e.target.value,
+                      channel_name: ch?.name || '',
+                      ingest_url: ch?.ingest_url || prev.ingest_url,
+                      stream_key: ch?.ingest_key || prev.stream_key,
+                    }))
+                  }}
+                  disabled={channelsLoading}
+                  helperText={channelsLoading ? 'Loading 24/7 channels…' : (channels.length === 0 ? 'No 24/7 channels found — enter one manually' : undefined)}
+                >
+                  {channels.map(c => (
+                    <MenuItem key={c.id} value={c.id}>{c.name || c.id} ({c.id.slice(0, 8)}…)</MenuItem>
+                  ))}
+                </TextField>
+              )}
+              <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5 }}>
+                <TextField
+                  select size="small" label="Ingest Format" fullWidth
+                  value={form.ingest_format} onChange={e => set('ingest_format', e.target.value)}
+                >
+                  {INGEST_FORMATS.map(f => <MenuItem key={f.value} value={f.value}>{f.label}</MenuItem>)}
+                </TextField>
+                <TextField
+                  select size="small" label="Region" fullWidth
+                  value={form.region} onChange={e => set('region', e.target.value)}
+                >
+                  {REGIONS.map(r => <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>)}
+                </TextField>
+              </Box>
+            </Box>
+
+            <Box sx={{
+              border: '1px solid rgba(255,255,255,0.08)', borderRadius: 1.5, p: 1.5, bgcolor: 'rgba(0,0,0,0.2)',
+              display: 'flex', flexDirection: 'column', gap: 1.5,
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1' }}>
+                  HARDWARE ENCODER CONFIG
+                </Typography>
+                <Button
+                  size="small" onClick={() => lookupIngestDetails(form.channel_id)}
+                  disabled={!form.channel_id || ingestLookupLoading}
+                  startIcon={ingestLookupLoading ? <CircularProgress size={12} sx={{ color: 'inherit' }} /> : <RefreshIcon sx={{ fontSize: 14 }} />}
+                  sx={{ fontSize: '0.68rem', color: AP.accent, textTransform: 'none', p: 0, minWidth: 0 }}
+                >
+                  Refresh from channel
+                </Button>
+              </Box>
+              {ingestLookupError && (
+                <Alert severity="warning" sx={{ fontSize: '0.75rem' }} onClose={() => setIngestLookupError('')}>
+                  {ingestLookupError}
+                </Alert>
+              )}
+              <TextField
+                size="small" label="JW Ingest URL" fullWidth
+                value={form.ingest_url || ''} onChange={e => set('ingest_url', e.target.value)}
+                placeholder="The URL your operator enters into the hardware encoder"
+                helperText={ingestLookupLoading ? 'Looking up ingest details…' : undefined}
+              />
+              <TextField
+                size="small" label="JW Stream Key" fullWidth
+                value={form.stream_key || ''} onChange={e => set('stream_key', e.target.value)}
+              />
+              {(form.youtube_ingest_url || form.youtube_stream_key) && (
+                <>
+                  <TextField
+                    size="small" label="YouTube Ingest URL" fullWidth disabled
+                    value={form.youtube_ingest_url || ''}
+                    helperText="Enter this as a second output on your hardware encoder to simulcast to YouTube"
+                  />
+                  <TextField
+                    size="small" label="YouTube Stream Key" fullWidth disabled
+                    value={form.youtube_stream_key || ''}
+                  />
+                </>
+              )}
+            </Box>
 
             <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1', mt: 0.5 }}>
               SIMULCAST DESTINATIONS
@@ -438,16 +605,16 @@ export default function EncoderForm({ token, tenantId, mode }) {
               color="#ff0000"
               disabled={!youtubeConnected}
             />
-            {form.simulcast_youtube && youtubeConnected && !form.youtube_broadcast_id && (
+            {form.simulcast_youtube && youtubeConnected && !channelYoutubeBroadcastId && !form.youtube_broadcast_id && (
               <ToggleRow
                 label="Auto-create YouTube Broadcast"
-                hint="Creates a persistent, always-on YouTube Live broadcast (starts private/unlisted) and binds an ingest stream to it"
+                hint="Creates a persistent, always-on YouTube Live broadcast (starts private) and binds an ingest stream to it"
                 checked={autoCreateYoutube}
                 onChange={setAutoCreateYoutube}
                 color="#ff0000"
               />
             )}
-            {form.simulcast_youtube && youtubeConnected && !form.youtube_broadcast_id && autoCreateYoutube && (
+            {form.simulcast_youtube && youtubeConnected && !channelYoutubeBroadcastId && !form.youtube_broadcast_id && autoCreateYoutube && (
               <TextField
                 size="small" label="YouTube Broadcast Title" fullWidth
                 value={youtubeBroadcastTitle} onChange={e => setYoutubeBroadcastTitle(e.target.value)}
@@ -455,7 +622,7 @@ export default function EncoderForm({ token, tenantId, mode }) {
                 helperText="The broadcast is created and bound when you save."
               />
             )}
-            {form.simulcast_youtube && youtubeConnected && !form.youtube_broadcast_id && !autoCreateYoutube && (
+            {form.simulcast_youtube && youtubeConnected && !channelYoutubeBroadcastId && !form.youtube_broadcast_id && !autoCreateYoutube && (
               <TextField
                 size="small" label="YouTube Broadcast ID" fullWidth
                 value={form.youtube_broadcast_id || ''} onChange={e => set('youtube_broadcast_id', e.target.value)}
@@ -463,28 +630,34 @@ export default function EncoderForm({ token, tenantId, mode }) {
                 helperText="Or auto-create above, or paste an existing persistent broadcast ID from YouTube Studio."
               />
             )}
-            {form.youtube_broadcast_id && (
+            {(channelYoutubeBroadcastId || form.youtube_broadcast_id) && (
               <Box sx={{
                 display: 'flex', flexDirection: 'column', gap: 0.5,
                 border: '1px solid rgba(255,0,0,0.3)', borderRadius: 1.5, bgcolor: 'rgba(255,0,0,0.08)', p: 1.5,
               }}>
                 <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#fff' }}>YouTube Broadcast</Typography>
                 <Typography
-                  component="a" href={`https://www.youtube.com/watch?v=${form.youtube_broadcast_id}`}
+                  component="a" href={`https://www.youtube.com/watch?v=${channelYoutubeBroadcastId || form.youtube_broadcast_id}`}
                   target="_blank" rel="noreferrer"
                   sx={{ fontSize: '0.78rem', color: '#ff6b6b', wordBreak: 'break-all' }}
                 >
-                  https://www.youtube.com/watch?v={form.youtube_broadcast_id}
+                  https://www.youtube.com/watch?v={channelYoutubeBroadcastId || form.youtube_broadcast_id}
                 </Typography>
                 <Typography sx={{ fontSize: '0.7rem', color: AP.muted, lineHeight: 1.4 }}>
-                  Starts Unlisted. Automatically switches to Public while this encoder is broadcasting on YouTube, and back to Unlisted when stopped.
+                  Starts Private. Automatically switches to Public while this encoder is broadcasting on YouTube, and back to Private when stopped.
                 </Typography>
-                <TextField
-                  size="small" label="YouTube Broadcast ID" fullWidth
-                  value={form.youtube_broadcast_id || ''} onChange={e => set('youtube_broadcast_id', e.target.value)}
-                  helperText="Manually override to link a different existing broadcast."
-                  sx={{ mt: 0.5 }}
-                />
+                {channelYoutubeBroadcastId ? (
+                  <Typography sx={{ fontSize: '0.7rem', color: AP.muted, fontStyle: 'italic' }}>
+                    Inherited from the assigned channel's YouTube simulcast — no separate setup needed.
+                  </Typography>
+                ) : (
+                  <TextField
+                    size="small" label="YouTube Broadcast ID" fullWidth
+                    value={form.youtube_broadcast_id || ''} onChange={e => set('youtube_broadcast_id', e.target.value)}
+                    helperText="Manually override to link a different existing broadcast."
+                    sx={{ mt: 0.5 }}
+                  />
+                )}
               </Box>
             )}
             <ToggleRow

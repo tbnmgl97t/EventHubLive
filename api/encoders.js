@@ -7,6 +7,10 @@ const WRITABLE_FIELDS = [
   'ingest_point_id', 'ingest_url', 'stream_key',
   'simulcast_youtube', 'simulcast_facebook', 'simulcast_website', 'simulcast_app',
   'vod_recording', 'youtube_broadcast_id', 'youtube_ingest_url', 'youtube_stream_key',
+  // BrightSpot publish/unpublish orchestration — stubbed manual id/name pairs
+  // until the REST Management API access issue is resolved (see EncoderForm).
+  'brightspot_page_id', 'brightspot_page_name',
+  'brightspot_video_page_id', 'brightspot_video_page_name',
 ]
 
 function pickWritable(body) {
