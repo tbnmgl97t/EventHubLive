@@ -1,5 +1,13 @@
 import { resolveTenantSession, getTenantJwCreds } from './_utils/tenant.js'
 import { supabase }    from './_utils/supabase.js'
+import { jwFetch }     from './_utils/jw.js'
+
+// Push formats (rtmp, srt, ...) nest credentials under `ingest_point.{url,key}`.
+// Pull formats (hls_pull, srt_pull, ...) have no key — JW pulls *from* a source
+// URL nested under `source_url.{url}` instead of accepting a push.
+function extractIngestPoint(fmtMeta) {
+  return fmtMeta?.ingest_point || fmtMeta?.source_url || null
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).end()
@@ -15,8 +23,8 @@ export default async function handler(req, res) {
     const ingestUrl  = `https://api.jwplayer.com/v2/sites/${jw.siteId}/live/broadcast/ingest/availability/?ingest_format=rtmp&page=1&page_length=50`
 
     const [streamsRes, ingestRes, ytRes, fbRes] = await Promise.all([
-      fetch(streamsUrl, { headers: { Authorization: jw.apiSecret, Accept: 'application/json' } }),
-      fetch(ingestUrl,  { headers: { Authorization: jw.apiSecret, Accept: 'application/json' } }),
+      jwFetch(jw, streamsUrl),
+      jwFetch(jw, ingestUrl),
       supabase.from('youtube_streams').select('*'),
       supabase.from('facebook_streams').select('*'),
     ])
@@ -59,7 +67,19 @@ export default async function handler(req, res) {
     const data = JSON.parse(body)
     const raw = data.streams || data.broadcast_streams || data.items || data.results || []
     const channels = raw.map(ch => {
-      const rtmp          = ch.metadata?.ingest?.rtmp?.ingest_point
+      // Ingest credentials are nested under metadata.ingest.<format>, keyed by
+      // whatever format the stream was actually provisioned with — not just rtmp.
+      const ingestMeta       = ch.metadata?.ingest || {}
+      const preferredFormat  = ch.ingest_format || ch.metadata?.ingest_format
+      // Check whatever formats JW actually sent back (not a fixed whitelist) —
+      // e.g. zixi_push shows up on some streams and isn't one we've special-cased.
+      const availableFormats = Object.keys(ingestMeta)
+      const orderedFormats   = preferredFormat
+        ? [preferredFormat, ...availableFormats.filter(f => f !== preferredFormat)]
+        : availableFormats
+      const ingestPoint = orderedFormats
+        .map(fmt => extractIngestPoint(ingestMeta[fmt]))
+        .find(point => point?.url || point?.key) || null
       const ingestPointId = ch.relationships?.ingest_point?.id || null
       // Derive display status from metadata.status + playout.availability
       // JW returns raw "streaming" for both preview and active, and "destroying" for stopping
@@ -83,12 +103,13 @@ export default async function handler(req, res) {
         name:             ch.metadata?.title || ch.id,
         status:           derivedStatus,
         stream_type:      ch.stream_type || null,
+        clipping_window:  ch.clipping_window_display_name || ch.clipping_window || ch.options?.clipping_window || ch.metadata?.clipping_window || null,
         stream_url:       ch.metadata?.playout?.hls || null,
         stream_start:     ch.metadata?.stream_start || null,
         stream_end:       ch.metadata?.stream_end   || null,
         created_at:       ch.created || ch.created_at || null,
-        ingest_url:       rtmp?.url  || null,
-        ingest_key:       rtmp?.key  || null,
+        ingest_url:       ingestPoint?.url  || null,
+        ingest_key:       ingestPoint?.key  || null,
         ingest_format:    ch.ingest_format || null,
         ingest_point_id:  ingestPointId,
         ingest_point_name: ingestNameMap[ingestPointId] || null,

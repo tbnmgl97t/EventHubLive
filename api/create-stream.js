@@ -23,15 +23,25 @@ export default async function handler(req, res) {
     end_time_utc,
     ingest_point_id,
     source_url       = null,     // required for pull-type ingest formats (srt_pull, hls_pull)
+    clipping_window  = '4h',     // 24/7 only — how far back footage can be clipped: 4h|6h|12h|24h|36h
     downloadable     = false,    // true → save VOD asset (10-day availability)
     youtube_key      = null,     // manual YouTube stream key (legacy)
     create_youtube   = false,    // true → auto-create YouTube broadcast via API
+    youtube_privacy_status = 'public', // starting visibility of the created broadcast: public|unlisted|private
     create_facebook  = false,    // true → auto-create Facebook live video via API
   } = req.body || {}
 
   if (!title) return res.status(400).json({ error: 'title is required' })
   if ((ingest_format === 'srt_pull' || ingest_format === 'hls_pull') && !source_url) {
     return res.status(400).json({ error: 'source_url is required for pull-type ingest formats' })
+  }
+  const ALLOWED_CLIPPING_WINDOWS = ['4h', '6h', '12h', '24h', '36h']
+  if (!ALLOWED_CLIPPING_WINDOWS.includes(clipping_window)) {
+    return res.status(400).json({ error: `clipping_window must be one of ${ALLOWED_CLIPPING_WINDOWS.join(', ')}` })
+  }
+  const ALLOWED_YOUTUBE_PRIVACY = ['public', 'unlisted', 'private']
+  if (!ALLOWED_YOUTUBE_PRIVACY.includes(youtube_privacy_status)) {
+    return res.status(400).json({ error: `youtube_privacy_status must be one of ${ALLOWED_YOUTUBE_PRIVACY.join(', ')}` })
   }
 
   try {
@@ -48,6 +58,7 @@ export default async function handler(req, res) {
         ingest_format,
         ...(source_url && { source_url }),
         stream_type:        streamType,
+        ...(streamType === '24/7' && { clipping_window: clipping_window }),
         enable_live_to_vod: downloadable ? true : false,
         ...(downloadable && { live_to_vod_method: 'hosted_capture' }),
         ...(streamType === 'event' && start_time_utc && { stream_start: start_time_utc }),
@@ -77,6 +88,13 @@ export default async function handler(req, res) {
       }
 
       try {
+        // 24/7 channels get a persistent/always-on broadcast (enableAutoStop:
+        // false, no scheduledEndTime — YouTube treats a broadcast with no end
+        // time as continuing indefinitely) instead of a one-off scheduled
+        // event. scheduledStartTime itself must still be near-now — YouTube
+        // rejects far-future sentinel dates with invalidScheduledStartTime.
+        const isAlwaysOn = streamType === '24/7'
+
         // YouTube requires scheduledStartTime to be in the future (RFC 3339, no ms)
         // Use start_time_utc if provided, otherwise 10 minutes from now
         const ytStartTime = start_time_utc
@@ -93,17 +111,18 @@ export default async function handler(req, res) {
               snippet: {
                 title,
                 scheduledStartTime: ytStartTime,
-                ...(end_time_utc ? { scheduledEndTime: end_time_utc.replace(/\.\d+Z$/, 'Z') } : {}),
+                ...(!isAlwaysOn && end_time_utc ? { scheduledEndTime: end_time_utc.replace(/\.\d+Z$/, 'Z') } : {}),
               },
               status: {
-                privacyStatus:           'public',
+                privacyStatus:           youtube_privacy_status,
                 selfDeclaredMadeForKids: false,
               },
               contentDetails: {
                 enableAutoStart: true,
-                enableAutoStop:  true,
+                enableAutoStop:  !isAlwaysOn,
                 recordFromStart: true,
                 enableDvr:       true,
+                ...(isAlwaysOn && { startWithSlate: false }),
               },
             },
           }
@@ -323,7 +342,7 @@ export default async function handler(req, res) {
           backup_rtmp_url: youtubeResult.backup_rtmp_url,
           stream_key:      youtubeResult.stream_key,
           watch_url:       youtubeResult.watch_url,
-          privacy_status:  'public',
+          privacy_status:  youtube_privacy_status,
           scheduled_start: start_time_utc || null,
           scheduled_end:   end_time_utc   || null,
           thumbnail_set:   false,
