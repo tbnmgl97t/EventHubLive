@@ -9,7 +9,7 @@ import {
   Box, Paper, Typography, TextField, Button, CircularProgress,
   Alert, IconButton, Chip, Divider, Tooltip, Snackbar, Collapse,
   Dialog, DialogTitle, DialogContent, DialogActions,
-  Drawer,
+  Drawer, InputAdornment,
   Table, TableBody, TableCell, TableHead, TableRow,
   AppBar, Toolbar, Stack, ToggleButton, ToggleButtonGroup, MenuItem,
   Tabs, Tab, Switch, useTheme, useMediaQuery,
@@ -36,6 +36,8 @@ import CloseIcon from '@mui/icons-material/Close'
 import AllInclusiveIcon from '@mui/icons-material/AllInclusive'
 import EventIcon from '@mui/icons-material/Event'
 import DownloadIcon from '@mui/icons-material/Download'
+import VisibilityIcon from '@mui/icons-material/Visibility'
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import LinkIcon from '@mui/icons-material/Link'
 import VpnKeyIcon from '@mui/icons-material/VpnKey'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
@@ -306,6 +308,7 @@ function LoginScreen() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -351,12 +354,29 @@ function LoginScreen() {
         />
         <TextField
           fullWidth
-          type="password"
+          type={showPassword ? 'text' : 'password'}
           label="Password"
           value={password}
           onChange={e => setPassword(e.target.value)}
           size="small"
           sx={{ mb: 2 }}
+          slotProps={{
+            input: {
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    onClick={() => setShowPassword(v => !v)}
+                    edge="end"
+                    size="small"
+                    tabIndex={-1}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            },
+          }}
         />
         <Button
           type="submit"
