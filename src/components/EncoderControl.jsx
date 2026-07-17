@@ -385,7 +385,7 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
   const [historyLoading, setHistoryLoading] = useState(true)
 
   const [broadcastState, setBroadcastState] = useState('preview') // preview | going_live | live | stopping
-  const [destinations, setDestinations]     = useState({ website: true, youtube: false, facebook: false, app: false })
+  const [destinations, setDestinations]     = useState({ website: true, youtube: false, facebook: false, app: false, fast: false })
   const [liveStartedAt, setLiveStartedAt]   = useState(null)
   const [lastBroadcast, setLastBroadcast]   = useState(null)
   const [broadcastTitle, setBroadcastTitle] = useState('')
@@ -507,16 +507,17 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
     : channelNotReady ? 'Manage this channel from the Live Streams page'
     : undefined
 
-  // Only Website defaults to on for a new broadcast — being configured for
-  // YouTube/Facebook/App just means the destination is available to toggle,
-  // not that it should go out live by default every time.
+  // Whether a destination should start pre-checked is its own per-encoder
+  // setting (simulcast_X_default) — separate from simulcast_X, which only
+  // controls whether the destination is configured/available at all.
   useEffect(() => {
     if (!encoder) return
     setDestinations({
-      website:  encoder.simulcast_website ?? true,
-      youtube:  false,
-      facebook: false,
-      app:      false,
+      website:  !!encoder.simulcast_website_default,
+      youtube:  !!encoder.simulcast_youtube_default,
+      facebook: !!encoder.simulcast_facebook_default,
+      app:      !!encoder.simulcast_app_default,
+      fast:     !!encoder.simulcast_fast_default,
     })
   }, [encoder?.id])
 
@@ -725,11 +726,15 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
                 ) : (
                   <Box component="iframe"
                     // Forces a fresh iframe (not just a src update on the existing one)
-                    // when the live state flips, so autoplay reliably kicks in — same
-                    // as the Stream Details page, where this box doesn't mount at all
-                    // until the channel is already live.
+                    // when the live state flips, so the frame actually reloads to
+                    // reflect the new public/private state — same as the Stream
+                    // Details page, where this box doesn't mount at all until the
+                    // channel is already live. Autoplay is always requested (muted,
+                    // so browsers allow it regardless of live state) rather than
+                    // gated on broadcastState — while still private, the owner can
+                    // still watch it here and shouldn't have to click play.
                     key={broadcastState === 'live' ? 'live' : 'idle'}
-                    src={`https://www.youtube.com/embed/${encoder.youtube_broadcast_id}?autoplay=${broadcastState === 'live' ? 1 : 0}&mute=1&rel=0&modestbranding=1`}
+                    src={`https://www.youtube.com/embed/${encoder.youtube_broadcast_id}?autoplay=1&mute=1&rel=0&modestbranding=1`}
                     title="YouTube preview"
                     sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
                     allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen
@@ -754,18 +759,26 @@ export default function EncoderControl({ token, tenantId, readOnly }) {
             <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', color: AP.muted, textTransform: 'uppercase', mb: 0.25 }}>
               Destinations
             </Typography>
-            <DestToggle label="Website (BrightSpot)" color={AP.live} checked={destinations.website}
-              onChange={v => toggleDest('website', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
-            {youtubeConnected && (
+            {encoder.simulcast_website && (
+              <DestToggle label="Website (BrightSpot)" color={AP.live} checked={destinations.website}
+                onChange={v => toggleDest('website', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
+            )}
+            {encoder.simulcast_app && (
+              <DestToggle label="Weather Livestream" color={AP.accent} checked={destinations.app}
+                onChange={v => toggleDest('app', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
+            )}
+            {encoder.simulcast_youtube && youtubeConnected && (
               <DestToggle label="YouTube" color="#ff0000" checked={destinations.youtube}
                 onChange={v => toggleDest('youtube', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
             )}
-            {facebookConnected && (
+            {encoder.simulcast_facebook && facebookConnected && (
               <DestToggle label="Facebook" color="#1877F2" checked={destinations.facebook}
                 onChange={v => toggleDest('facebook', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
             )}
-            <DestToggle label="App (MRSS)" color={AP.accent} checked={destinations.app}
-              onChange={v => toggleDest('app', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
+            {encoder.simulcast_fast && (
+              <DestToggle label="FAST Channel Break-in" color={AP.accent} checked={destinations.fast}
+                onChange={v => toggleDest('fast', v)} disabled={readOnly || destsLocked || channelUnavailable} locked={destsLocked} />
+            )}
           </Box>
 
           {/* Go Live section */}

@@ -3,6 +3,7 @@
     { "source": "/((?!api/|@|src/|node_modules/)[^.]*)", "destination": "/" }
   ],
   "crons": [
-    { "path": "/api/cron-cleanup-247-streams", "schedule": "0 * * * *" }
+    { "path": "/api/cron-cleanup-247-streams", "schedule": "0 * * * *" },
+    { "path": "/api/fast-renew-breakin", "schedule": "*/3 * * * *" }
   ]
 }
