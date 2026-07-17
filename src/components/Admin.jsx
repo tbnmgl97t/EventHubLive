@@ -11,7 +11,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Drawer,
   Table, TableBody, TableCell, TableHead, TableRow,
-  AppBar, Toolbar, Stack, ToggleButton, ToggleButtonGroup, MenuItem,
+  AppBar, Toolbar, Stack, ToggleButton, ToggleButtonGroup, MenuItem, Menu,
   Tabs, Tab, Switch, useTheme, useMediaQuery,
 } from '@mui/material'
 import { ThemeProvider, CssBaseline, createTheme } from '@mui/material'
@@ -4206,6 +4206,97 @@ function BrightSpotEditDialog({ open, onClose, tenant, tenantLoading, saveTenant
   )
 }
 
+function FastChannelsIcon({ size = 24 }) {
+  return (
+    <Box sx={{ width: size, height: size, borderRadius: '6px', bgcolor: '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Typography sx={{ fontSize: size * 0.32, fontWeight: 900, color: '#fff', lineHeight: 1 }}>FC</Typography>
+    </Box>
+  )
+}
+
+function FastChannelsEditDialog({ open, onClose, tenant, tenantLoading, saveTenant, token, tenantId }) {
+  const [apiKey, setApiKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState(null) // { severity, message } | null
+
+  useEffect(() => {
+    if (!open) return
+    setApiKey(tenant?.fast_api_key || '')
+    setError(''); setSaved(false); setTestResult(null)
+  }, [open, tenant])
+
+  async function handleSave(e) {
+    e.preventDefault()
+    setSaving(true); setError(''); setSaved(false)
+    try {
+      await saveTenant({ fast_api_key: apiKey.trim() || null })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleTest() {
+    setTesting(true); setTestResult(null)
+    try {
+      const res = await fetch('/api/fast-test-connection', {
+        method: 'POST',
+        headers: authHeader(token, tenantId),
+        body: JSON.stringify({ apiKey: apiKey.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      setTestResult({ severity: 'success', message: `Connected — ${data.channel_count} channel${data.channel_count === 1 ? '' : 's'} visible` })
+    } catch (err) {
+      setTestResult({ severity: 'error', message: err.message })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <FastChannelsIcon size={22} />
+        Pop-up Channels (FAST)
+        <IconButton size="small" onClick={onClose} sx={{ ml: 'auto' }}><CloseIcon fontSize="small" /></IconButton>
+      </DialogTitle>
+      <Box component="form" onSubmit={handleSave}>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          {tenantLoading ? (
+            <CircularProgress size={20} sx={{ color: AP.accent }} />
+          ) : (
+            <>
+              {error && <Alert severity="error" sx={{ fontSize: '0.78rem' }}>{error}</Alert>}
+              {testResult && <Alert severity={testResult.severity} sx={{ fontSize: '0.78rem', wordBreak: 'break-word' }}>{testResult.message}</Alert>}
+              <TextField size="small" type="password" label="API Key" fullWidth autoFocus value={apiKey} onChange={e => setApiKey(e.target.value)}
+                helperText="From the Pop-up Channels UI, under your email → API keys" />
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button variant="outlined" size="small" onClick={handleTest} disabled={testing || tenantLoading || !apiKey.trim()}
+            sx={{ borderColor: AP.accentBdr, color: AP.accent, '&:hover': { borderColor: AP.accent, bgcolor: AP.accentDim } }}>
+            {testing ? <CircularProgress size={16} sx={{ color: AP.accent }} /> : 'Test Connection'}
+          </Button>
+          <Box sx={{ flex: 1 }} />
+          <Button onClick={onClose} sx={{ color: AP.muted }}>Cancel</Button>
+          <Button type="submit" variant="contained" disabled={saving || tenantLoading}
+            sx={{ bgcolor: AP.accent, '&:hover': { bgcolor: AP.accentHov } }}>
+            {saving ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : saved ? 'Saved' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Box>
+    </Dialog>
+  )
+}
+
 // ─── Integrations: compact tile list + "Add Integration" picker modal ─────────
 
 function IntegrationTile({ icon, name, description, statusLabel, statusColor, onClick }) {
@@ -4298,6 +4389,12 @@ function IntegrationsPanel({ token, tenantId }) {
       statusLabel: tenantLoading ? '…' : tenant?.brightspot_cms_url ? 'Configured' : 'Not configured',
       statusColor: tenant?.brightspot_cms_url ? AP.live : AP.warn,
     },
+    {
+      id: 'fast', name: 'Pop-up Channels (FAST)', description: 'Break in to a FAST channel from an encoder', icon: <FastChannelsIcon />,
+      configured: !!tenant?.fast_api_key,
+      statusLabel: tenantLoading ? '…' : tenant?.fast_api_key ? 'Configured' : 'Not configured',
+      statusColor: tenant?.fast_api_key ? AP.live : AP.warn,
+    },
   ]
 
   return (
@@ -4339,6 +4436,11 @@ function IntegrationsPanel({ token, tenantId }) {
       />
       <YouTubeEditDialog open={openKey === 'youtube'} onClose={() => setOpenKey(null)} integration={youtube} />
       <FacebookEditDialog open={openKey === 'facebook'} onClose={() => setOpenKey(null)} integration={facebook} />
+      <FastChannelsEditDialog
+        open={openKey === 'fast'} onClose={() => setOpenKey(null)}
+        tenant={tenant} tenantLoading={tenantLoading} saveTenant={saveTenant}
+        token={token} tenantId={tenantId}
+      />
     </>
   )
 }
@@ -4795,7 +4897,7 @@ function tabToPath(tab, view) {
   return '/admin/streams'
 }
 
-function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tenants, onSwitchTenant, onLogout }) {
+function Dashboard({ token, tenantId, tenantName, userEmail, isSuperAdmin, tenantRole, tenants, onSwitchTenant, onLogout }) {
   const navigate   = useNavigate()
   const location   = useLocation()
   const { tenant } = useTenant()
@@ -4804,6 +4906,7 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
   const theme      = useTheme()
   const isMobile   = useMediaQuery(theme.breakpoints.down('md'))
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [tenantMenuAnchor, setTenantMenuAnchor] = useState(null)
   const [tournaments, setTournaments] = useState([])
   const [channels, setChannels] = useState([])
   const [loadingTournaments, setLoadingTournaments] = useState(true)
@@ -5218,8 +5321,20 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
                 sx={{ height: 20, fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(148,163,184,0.12)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.3)' }} />
             )}
             {liveNow > 0 && (
-              <Chip label={`${liveNow} LIVE`} size="small"
-                sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700, bgcolor: AP.liveDim, color: AP.live, border: `1px solid ${AP.liveBdr}` }} />
+              <Box sx={{
+                display: 'flex', alignItems: 'center', gap: 0.6,
+                height: 20, px: 1, borderRadius: '10px',
+                bgcolor: AP.liveDim, border: `1px solid ${AP.liveBdr}`,
+              }}>
+                <Box sx={{
+                  width: 6, height: 6, borderRadius: '50%', bgcolor: AP.live, boxShadow: `0 0 6px ${AP.live}`, flexShrink: 0,
+                  animation: 'navLiveDot 1.6s ease-in-out infinite',
+                  '@keyframes navLiveDot': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.3 } },
+                }} />
+                <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.live, whiteSpace: 'nowrap' }}>
+                  {liveNow} LIVE
+                </Typography>
+              </Box>
             )}
           </Box>
           {tenants && tenants.length > 1 && (
@@ -5236,6 +5351,44 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
             >
               {tenants.map(t => <MenuItem key={t.id} value={t.id} sx={{ fontSize: '0.85rem' }}>{t.name}</MenuItem>)}
             </TextField>
+          )}
+        </Box>
+      )}
+      {!isMobile && (
+        <Box sx={{ px: 2, pb: 1.5, mb: 1, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          {tenants && tenants.length > 1 ? (
+            <>
+              <Box
+                onClick={e => setTenantMenuAnchor(e.currentTarget)}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.4, cursor: 'pointer',
+                  borderRadius: 1, py: 0.5, mx: -0.5, px: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' },
+                }}
+              >
+                <Typography sx={{ fontSize: '0.88rem', fontWeight: 700, color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {tenantName}
+                </Typography>
+                <ExpandMoreIcon sx={{ fontSize: 18, color: '#64748b', flexShrink: 0 }} />
+              </Box>
+              <Menu anchorEl={tenantMenuAnchor} open={!!tenantMenuAnchor} onClose={() => setTenantMenuAnchor(null)}>
+                {tenants.map(t => (
+                  <MenuItem
+                    key={t.id}
+                    selected={t.id === tenantId}
+                    sx={{ fontSize: '0.82rem' }}
+                    onClick={() => { onSwitchTenant?.(t.id); setTenantMenuAnchor(null) }}
+                  >
+                    {t.name}
+                  </MenuItem>
+                ))}
+              </Menu>
+            </>
+          ) : (
+            tenantName && (
+              <Typography sx={{ fontSize: '0.88rem', fontWeight: 700, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
+                {tenantName}
+              </Typography>
+            )
           )}
         </Box>
       )}
@@ -5271,6 +5424,33 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
           })}
         </Box>
       ))}
+
+      {/* Profile — pinned to the bottom of the rail */}
+      <Box sx={{ mt: 'auto', px: 2, pt: 2, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+          <Box sx={{
+            width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            bgcolor: AP.accentDim, border: `1px solid ${AP.accentBdr}`,
+            color: AP.accent, fontSize: '0.85rem', fontWeight: 700,
+          }}>
+            {(userEmail || '?').charAt(0).toUpperCase()}
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {userEmail || 'Account'}
+            </Typography>
+            <Typography sx={{ fontSize: '0.65rem', color: '#64748b' }}>
+              {isSuperAdmin ? 'Super Admin' : (isReadOnly ? 'Read-only' : 'Admin')}
+            </Typography>
+          </Box>
+          <Tooltip title="Logout">
+            <IconButton onClick={onLogout} size="small" sx={{ color: '#64748b', '&:hover': { color: '#a8bcd4' } }}>
+              <LogoutIcon sx={{ fontSize: 17 }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      </Box>
     </Box>
   )
 
@@ -5291,44 +5471,28 @@ function Dashboard({ token, tenantId, tenantName, isSuperAdmin, tenantRole, tena
 
         {/* Topbar logo */}
         <EHLLogo size={20} dark animate />
-        <Typography variant="caption" sx={{ color: '#334155', fontSize: '0.7rem', display: { xs: 'none', md: 'inline' } }}>Admin</Typography>
-        {tenantName && (
-          <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem', display: { xs: 'none', md: 'inline' } }}>· {tenantName}</Typography>
-        )}
-        {isSuperAdmin && (
-          <Chip label="SUPER ADMIN" size="small"
-            sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.35)', display: { xs: 'none', md: 'inline-flex' } }} />
-        )}
-        {isReadOnly && (
-          <Chip label="READ-ONLY" size="small"
-            sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(148,163,184,0.12)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.3)', display: { xs: 'none', md: 'inline-flex' } }} />
-        )}
-        {liveNow > 0 && (
-          <Chip label={`${liveNow} LIVE`} size="small"
-            sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: AP.liveDim, color: AP.live, border: `1px solid ${AP.liveBdr}`, display: { xs: 'none', sm: 'inline-flex' } }} />
-        )}
-        <Box ml="auto" display="flex" gap={1} alignItems="center">
-          {tenants && tenants.length > 1 && (
-            <TextField
-              select
-              size="small"
-              value={tenantId}
-              onChange={e => onSwitchTenant?.(e.target.value)}
-              sx={{
-                display: { xs: 'none', md: 'flex' },
-                '& .MuiInputBase-root': { fontSize: '0.72rem', color: '#a8bcd4', height: 30 },
-                '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.12)' },
-                minWidth: 140,
-              }}
-            >
-              {tenants.map(t => <MenuItem key={t.id} value={t.id} sx={{ fontSize: '0.78rem' }}>{t.name}</MenuItem>)}
-            </TextField>
+        {/* Tenant identity now lives in the sidebar nav, above Management; role is on the profile block at its bottom */}
+        <Box ml="auto" display="flex" alignItems="center" gap={1}>
+          {isReadOnly && (
+            <Chip label="READ-ONLY" size="small"
+              sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', bgcolor: 'rgba(148,163,184,0.12)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.3)', display: { xs: 'none', md: 'inline-flex' } }} />
           )}
-          <Tooltip title="Logout">
-            <IconButton onClick={onLogout} sx={{ color: '#a8bcd4' }} size="small">
-              <LogoutIcon sx={{ fontSize: 18 }} />
-            </IconButton>
-          </Tooltip>
+          {liveNow > 0 && (
+            <Box sx={{
+              display: { xs: 'none', sm: 'flex' }, alignItems: 'center', gap: 0.6,
+              height: 18, px: 1, borderRadius: '9px',
+              bgcolor: AP.liveDim, border: `1px solid ${AP.liveBdr}`,
+            }}>
+              <Box sx={{
+                width: 5, height: 5, borderRadius: '50%', bgcolor: AP.live, boxShadow: `0 0 5px ${AP.live}`, flexShrink: 0,
+                animation: 'navLiveDot 1.6s ease-in-out infinite',
+                '@keyframes navLiveDot': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.3 } },
+              }} />
+              <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.06em', color: AP.live, whiteSpace: 'nowrap' }}>
+                {liveNow} LIVE
+              </Typography>
+            </Box>
+          )}
         </Box>
       </Box>
 
@@ -6099,6 +6263,7 @@ export default function Admin() {
         token={authSession.access_token}
         tenantId={activeTenant.id}
         tenantName={activeTenant.name}
+        userEmail={me.email}
         isSuperAdmin={me.isSuperAdmin}
         tenantRole={tenantRole}
         tenants={me.tenants}

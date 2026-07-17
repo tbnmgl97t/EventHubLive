@@ -12,6 +12,7 @@ import { resolveTenantSession, getTenantJwCreds } from './_utils/tenant.js'
 import { canWrite }             from './_utils/auth.js'
 import { supabase }             from './_utils/supabase.js'
 import { youtubeRequest }       from './_utils/youtube.js'
+import { patchSchedule }        from './_utils/fast-channels.js'
 
 // TODO: Replace with real BrightSpot unpublish API call — mirror of the
 // publish stub in encoder-go-live.js, once that endpoint is confirmed.
@@ -44,11 +45,28 @@ async function stopFacebook(tenant, encoder) {
   return { success: true, stub: true }
 }
 
+// Removes the live_247 schedule item inserted by breakInToFAST
+// (encoder-go-live.js), restoring the FAST channel's regular schedule
+// (or filler playlist, if configured) for whatever gap is left behind.
+async function endFASTBreakIn(tenant, encoder) {
+  if (!tenant.fast_api_key) throw new Error('Pop-up Channels API key not configured for this tenant')
+  if (!encoder.fast_channel_id) throw new Error('No FAST channel configured for this encoder')
+  if (!encoder.fast_schedule_item_id) {
+    return { success: true, note: 'No active break-in schedule item to remove' }
+  }
+
+  const creds = { apiKey: tenant.fast_api_key }
+  await patchSchedule(creds, encoder.fast_channel_id, { delete: [encoder.fast_schedule_item_id] })
+  await supabase.from('encoders').update({ fast_schedule_item_id: null }).eq('id', encoder.id)
+  return { success: true }
+}
+
 const STOP_HANDLERS = {
   website:  unpublishFromBrightSpot,
   app:      disableMRSSFeed,
   youtube:  makeYouTubePrivate,
   facebook: stopFacebook,
+  fast:     endFASTBreakIn,
 }
 
 export default async function handler(req, res) {
@@ -73,7 +91,7 @@ export default async function handler(req, res) {
 
   const { data: tenant } = await supabase
     .from('tenants')
-    .select('timezone, brightspot_cms_url, brightspot_site_url, brightspot_api_key, youtube_refresh_token, facebook_page_access_token, facebook_page_id, facebook_page_name')
+    .select('timezone, brightspot_cms_url, brightspot_site_url, brightspot_api_key, youtube_refresh_token, facebook_page_access_token, facebook_page_id, facebook_page_name, fast_api_key')
     .eq('id', session.tenantId)
     .single()
 

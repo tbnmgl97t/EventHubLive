@@ -50,36 +50,59 @@ const EMPTY_FORM = {
   ingest_format: 'rtmp', region: 'us-east-1',
   ingest_url: '', stream_key: '',
   simulcast_website: true, simulcast_youtube: false, simulcast_facebook: false, simulcast_app: false,
+  simulcast_fast: false, fast_channel_id: '',
+  simulcast_website_default: true, simulcast_youtube_default: false,
+  simulcast_facebook_default: false, simulcast_app_default: false, simulcast_fast_default: false,
   vod_recording: true, youtube_broadcast_id: '',
   youtube_ingest_url: '', youtube_stream_key: '',
   brightspot_page_id: '', brightspot_page_name: '',
   brightspot_video_page_id: '', brightspot_video_page_name: '',
 }
 
-function ToggleRow({ label, hint, checked, onChange, color = AP.accent, disabled }) {
+function ToggleRow({ label, hint, checked, onChange, color = AP.accent, disabled, children }) {
   return (
     <Box sx={{
-      display: 'flex', alignItems: 'center', gap: 1.5,
+      display: 'flex', flexDirection: 'column', gap: 1,
       border: `1px solid ${checked ? `${color}55` : 'rgba(255,255,255,0.1)'}`,
       borderRadius: 1.5, p: 1.5, bgcolor: checked ? `${color}14` : 'rgba(255,255,255,0.02)',
       opacity: disabled ? 0.45 : 1,
     }}>
-      <Box sx={{ flex: 1 }}>
-        <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: checked ? '#fff' : AP.muted, lineHeight: 1.2 }}>
-          {label}
-        </Typography>
-        {hint && <Typography sx={{ fontSize: '0.68rem', color: AP.muted, mt: 0.25 }}>{hint}</Typography>}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box sx={{ flex: 1 }}>
+          <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: checked ? '#fff' : AP.muted, lineHeight: 1.2 }}>
+            {label}
+          </Typography>
+          {hint && <Typography sx={{ fontSize: '0.68rem', color: AP.muted, mt: 0.25 }}>{hint}</Typography>}
+        </Box>
+        <Switch
+          checked={checked}
+          disabled={disabled}
+          onChange={e => onChange(e.target.checked)}
+          size="small"
+          sx={{
+            '& .MuiSwitch-switchBase.Mui-checked': { color },
+            '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { bgcolor: color },
+          }}
+        />
       </Box>
-      <Switch
-        checked={checked}
-        disabled={disabled}
-        onChange={e => onChange(e.target.checked)}
-        size="small"
-        sx={{
-          '& .MuiSwitch-switchBase.Mui-checked': { color },
-          '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { bgcolor: color },
-        }}
+      {children}
+    </Box>
+  )
+}
+
+// Compact sub-row nested inside a destination's ToggleRow — whether that
+// destination should start pre-checked in the Encoder Control page's
+// destinations panel, separate from whether it's configured/available at all.
+function DefaultOnRow({ checked, onChange }) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+      <Checkbox
+        size="small" checked={checked} onChange={e => onChange(e.target.checked)}
+        sx={{ p: 0.5, color: AP.muted, '&.Mui-checked': { color: AP.accent } }}
       />
+      <Typography sx={{ fontSize: '0.72rem', color: AP.muted }}>
+        On by default when going live
+      </Typography>
     </Box>
   )
 }
@@ -334,6 +357,13 @@ export default function EncoderForm({ token, tenantId, mode }) {
         simulcast_youtube: form.simulcast_youtube && youtubeConnected,
         simulcast_facebook: form.simulcast_facebook && facebookConnected,
         simulcast_app: form.simulcast_app,
+        simulcast_fast: form.simulcast_fast,
+        fast_channel_id: form.fast_channel_id?.trim() || null,
+        simulcast_website_default: form.simulcast_website && form.simulcast_website_default,
+        simulcast_youtube_default: form.simulcast_youtube && youtubeConnected && form.simulcast_youtube_default,
+        simulcast_facebook_default: form.simulcast_facebook && facebookConnected && form.simulcast_facebook_default,
+        simulcast_app_default: form.simulcast_app && form.simulcast_app_default,
+        simulcast_fast_default: form.simulcast_fast && form.simulcast_fast_default,
         vod_recording: form.vod_recording,
         youtube_broadcast_id: ytBroadcastId,
         youtube_ingest_url: ytIngestUrl,
@@ -596,7 +626,16 @@ export default function EncoderForm({ token, tenantId, mode }) {
             <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1', mt: 0.5 }}>
               SIMULCAST DESTINATIONS
             </Typography>
-            <ToggleRow label="Website" checked={form.simulcast_website} onChange={v => set('simulcast_website', v)} color={AP.live} />
+            <ToggleRow label="Website" checked={form.simulcast_website} onChange={v => set('simulcast_website', v)} color={AP.live}>
+              {form.simulcast_website && (
+                <DefaultOnRow checked={form.simulcast_website_default} onChange={v => set('simulcast_website_default', v)} />
+              )}
+            </ToggleRow>
+            <ToggleRow label="Weather Livestream" checked={form.simulcast_app} onChange={v => set('simulcast_app', v)}>
+              {form.simulcast_app && (
+                <DefaultOnRow checked={form.simulcast_app_default} onChange={v => set('simulcast_app_default', v)} />
+              )}
+            </ToggleRow>
             <ToggleRow
               label="YouTube"
               hint={youtubeConnected ? undefined : 'Connect your YouTube account in Settings to enable'}
@@ -604,7 +643,11 @@ export default function EncoderForm({ token, tenantId, mode }) {
               onChange={v => set('simulcast_youtube', v)}
               color="#ff0000"
               disabled={!youtubeConnected}
-            />
+            >
+              {form.simulcast_youtube && youtubeConnected && (
+                <DefaultOnRow checked={form.simulcast_youtube_default} onChange={v => set('simulcast_youtube_default', v)} />
+              )}
+            </ToggleRow>
             {form.simulcast_youtube && youtubeConnected && !channelYoutubeBroadcastId && !form.youtube_broadcast_id && (
               <ToggleRow
                 label="Auto-create YouTube Broadcast"
@@ -667,8 +710,29 @@ export default function EncoderForm({ token, tenantId, mode }) {
               onChange={v => set('simulcast_facebook', v)}
               color="#1877F2"
               disabled={!facebookConnected}
-            />
-            <ToggleRow label="App" checked={form.simulcast_app} onChange={v => set('simulcast_app', v)} />
+            >
+              {form.simulcast_facebook && facebookConnected && (
+                <DefaultOnRow checked={form.simulcast_facebook_default} onChange={v => set('simulcast_facebook_default', v)} />
+              )}
+            </ToggleRow>
+            <ToggleRow
+              label="FAST Channel Break-in"
+              hint="Breaks in to a Pop-up Channels (FAST) channel via the JW API when live"
+              checked={form.simulcast_fast}
+              onChange={v => set('simulcast_fast', v)}
+            >
+              {form.simulcast_fast && (
+                <DefaultOnRow checked={form.simulcast_fast_default} onChange={v => set('simulcast_fast_default', v)} />
+              )}
+            </ToggleRow>
+            {form.simulcast_fast && (
+              <TextField
+                size="small" label="FAST Channel ID" fullWidth
+                value={form.fast_channel_id || ''} onChange={e => set('fast_channel_id', e.target.value)}
+                placeholder="Pop-up Channels channel_id to break in to"
+                helperText="Must be a Scheduled (linear) channel with Live Mixing enabled, or the break-in has no effect."
+              />
+            )}
 
             <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', color: '#cbd5e1', mt: 0.5 }}>
               RECORDING

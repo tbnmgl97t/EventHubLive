@@ -117,3 +117,14 @@ export async function getTenantBrightspotCreds(tenantId) {
     clientId:  data.brightspot_client_id,
   }
 }
+
+/** Fetches a tenant's Pop-up Channels (FAST) API credentials, or null if not configured. */
+export async function getTenantFastCreds(tenantId) {
+  const { data } = await supabase
+    .from('tenants')
+    .select('fast_api_key')
+    .eq('id', tenantId)
+    .single()
+  if (!data?.fast_api_key) return null
+  return { apiKey: data.fast_api_key }
+}

@@ -5,12 +5,18 @@ import { supabase }             from './_utils/supabase.js'
 const WRITABLE_FIELDS = [
   'name', 'description', 'channel_id', 'channel_name', 'ingest_format', 'region',
   'ingest_point_id', 'ingest_url', 'stream_key',
-  'simulcast_youtube', 'simulcast_facebook', 'simulcast_website', 'simulcast_app',
+  'simulcast_youtube', 'simulcast_facebook', 'simulcast_website', 'simulcast_app', 'simulcast_fast',
+  'simulcast_website_default', 'simulcast_youtube_default',
+  'simulcast_facebook_default', 'simulcast_app_default', 'simulcast_fast_default',
   'vod_recording', 'youtube_broadcast_id', 'youtube_ingest_url', 'youtube_stream_key',
   // BrightSpot publish/unpublish orchestration — stubbed manual id/name pairs
   // until the REST Management API access issue is resolved (see EncoderForm).
   'brightspot_page_id', 'brightspot_page_name',
   'brightspot_video_page_id', 'brightspot_video_page_name',
+  // Which Pop-up (FAST) channel this encoder breaks in to. Not writable here:
+  // fast_schedule_item_id, which encoder-go-live.js/encoder-stop.js manage
+  // themselves as the break-in is created/removed.
+  'fast_channel_id',
 ]
 
 function pickWritable(body) {
