@@ -1,6 +1,6 @@
 /**
  * POST /api/encoder-go-live
- * Body: { encoder_id, destinations: ["website" | "youtube" | "facebook" | "app", ...] }
+ * Body: { encoder_id, destinations: ["website" | "youtube" | "facebook" | "app" | "fast", ...] }
  *
  * Orchestrates routing an encoder's always-on JW channel to public
  * destinations, in parallel. Each destination is independent — one failing
@@ -12,6 +12,8 @@ import { resolveTenantSession } from './_utils/tenant.js'
 import { canWrite }             from './_utils/auth.js'
 import { supabase }             from './_utils/supabase.js'
 import { youtubeRequest }       from './_utils/youtube.js'
+import { patchSchedule }        from './_utils/fast-channels.js'
+import { randomUUID }           from 'node:crypto'
 
 // TODO: Replace with real BrightSpot publish API call
 // The BrightSpot REST endpoint to publish a live stream article is not yet confirmed.
@@ -54,11 +56,49 @@ async function goLiveFacebook(tenant, encoder, title) {
   return { success: true, stub: true }
 }
 
+// Breaks in to a FAST (Pop-up Channels) linear channel by inserting a
+// live_247 schedule item pointed at this encoder's own JW channel. The
+// target FAST channel must be channel_type: 1 (Scheduled) with live_mixing
+// enabled, or the schedule change has no visible effect on playout.
+// end_time is a short (10 min) safety ceiling, not the real end — the real
+// end is an explicit delete (see endFASTBreakIn in encoder-stop.js). The
+// fast-renew-breakin cron (see vercel.json) pushes this ceiling forward every
+// few minutes for as long as the break-in stays active, so a normal
+// broadcast never actually reaches it; the short ceiling only matters if the
+// cron stops running, in which case the break-in self-heals away within at
+// most ~10 minutes instead of running forever unattended.
+const BREAKIN_CEILING_MS = 10 * 60 * 1000
+
+async function breakInToFAST(tenant, encoder) {
+  if (!tenant.fast_api_key) throw new Error('Pop-up Channels API key not configured for this tenant')
+  if (!encoder.fast_channel_id) throw new Error('No FAST channel configured for this encoder')
+
+  const creds = { apiKey: tenant.fast_api_key }
+  const now = new Date()
+  const ceiling = new Date(now.getTime() + BREAKIN_CEILING_MS)
+  // The API doesn't assign ids on insert — the client supplies one, even for
+  // a brand-new item — so we mint one here and it comes back unchanged.
+  const itemId = randomUUID()
+  const [created] = await patchSchedule(creds, encoder.fast_channel_id, {
+    add: [{
+      id: itemId,
+      item_type: 'live_247',
+      media_id: encoder.channel_id,
+      start_time: now.toISOString(),
+      end_time: ceiling.toISOString(),
+    }],
+  })
+
+  await supabase.from('encoders').update({ fast_schedule_item_id: created?.id || itemId }).eq('id', encoder.id)
+  return { success: true, schedule_item_id: created?.id || itemId }
+}
+
 const HANDLERS = {
   website:  publishToBrightSpot,
   app:      enableMRSSFeed,
   youtube:  goLiveYouTube,
   facebook: goLiveFacebook,
+  fast:     breakInToFAST,
 }
 
 export default async function handler(req, res) {
@@ -84,7 +124,7 @@ export default async function handler(req, res) {
 
   const { data: tenant } = await supabase
     .from('tenants')
-    .select('brightspot_cms_url, brightspot_site_url, brightspot_api_key, youtube_refresh_token, facebook_page_access_token, facebook_page_id, facebook_page_name')
+    .select('brightspot_cms_url, brightspot_site_url, brightspot_api_key, youtube_refresh_token, facebook_page_access_token, facebook_page_id, facebook_page_name, fast_api_key')
     .eq('id', session.tenantId)
     .single()
 
