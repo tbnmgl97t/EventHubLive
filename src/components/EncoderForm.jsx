@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Box, Typography, TextField, Button, CircularProgress, Alert, MenuItem,
@@ -120,6 +120,11 @@ function BrightSpotPagePicker({ label, kind, idValue, nameValue, onSelect, token
   const [unavailable, setUnavailable] = useState(false)
   const debounceRef = useRef(null)
 
+  const value = useMemo(
+    () => (idValue ? { id: idValue, name: nameValue || idValue } : null),
+    [idValue, nameValue]
+  )
+
   useEffect(() => {
     if (manualMode) return
     clearTimeout(debounceRef.current)
@@ -171,9 +176,12 @@ function BrightSpotPagePicker({ label, kind, idValue, nameValue, onSelect, token
           filterOptions={x => x}
           getOptionLabel={opt => (typeof opt === 'string' ? opt : (opt.name || opt.id || ''))}
           isOptionEqualToValue={(opt, val) => opt.id === val?.id}
-          value={idValue ? { id: idValue, name: nameValue || idValue } : null}
+          value={value}
           onInputChange={(e, val, reason) => { if (reason === 'input') setQuery(val) }}
-          onChange={(e, val) => onSelect(val?.id || '', val?.name || '')}
+          onChange={(e, val) => {
+            onSelect(val?.id || '', val?.name || '')
+            if (!val) { setQuery(''); setOptions([]) }
+          }}
           noOptionsText={unavailable ? 'BrightSpot search not available yet' : (query ? 'No matches' : 'Type to search…')}
           renderInput={params => (
             <TextField {...params} placeholder={`Search ${label.toLowerCase()}…`}
