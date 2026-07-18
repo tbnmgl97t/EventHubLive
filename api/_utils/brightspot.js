@@ -29,6 +29,31 @@ export async function brightspotCmaFetch(creds, path, opts = {}) {
   return { ok: res.ok && body?.status !== 'error', status: res.status, body }
 }
 
+// BrightSpot's custom EventHubLive endpoints (get-all-live-videos,
+// get-all-video-pages) back the Encoder Page / Video Page pickers in
+// EncoderForm. Unlike the CMA above, these live on the tenant's CMS host and
+// need no client-id/secret headers — confirmed reachable with a plain GET.
+export async function brightspotEventHubFetch(creds, path) {
+  const base = creds.cmsUrl || creds.siteUrl
+  const url = new URL(path, base)
+  const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } })
+  const text = await res.text()
+  let body
+  try { body = JSON.parse(text) } catch { body = text }
+  return { ok: res.ok, status: res.status, body }
+}
+
+// Flattens the EventHubLive response shape — { data: { Get: { <key>: { State:
+// { _id, _label } } } } }, where <key> is a throwaway identifier — into the
+// { id, name } list the frontend picker expects.
+export function mapEventHubItems(body) {
+  return Object.values(body?.data?.Get || {})
+    .map(entry => entry?.State)
+    .filter(Boolean)
+    .map(state => ({ id: state._id || null, name: state._label || null }))
+    .filter(item => item.id && item.name)
+}
+
 /**
  * Resolves an encoder's assigned BrightSpot pages, but only if BrightSpot is
  * actually configured for the tenant *right now* — an encoder can carry

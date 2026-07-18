@@ -172,7 +172,7 @@ function BrightSpotPagePicker({ label, kind, idValue, nameValue, onSelect, token
           getOptionLabel={opt => (typeof opt === 'string' ? opt : (opt.name || opt.id || ''))}
           isOptionEqualToValue={(opt, val) => opt.id === val?.id}
           value={idValue ? { id: idValue, name: nameValue || idValue } : null}
-          onInputChange={(e, val) => setQuery(val)}
+          onInputChange={(e, val, reason) => { if (reason === 'input') setQuery(val) }}
           onChange={(e, val) => onSelect(val?.id || '', val?.name || '')}
           noOptionsText={unavailable ? 'BrightSpot search not available yet' : (query ? 'No matches' : 'Type to search…')}
           renderInput={params => (

@@ -4,25 +4,20 @@
  * Search BrightSpot for pages to assign to an encoder (Encoder Page /
  * Encoder Video Page). Backs the search dropdown in EncoderForm.
  *
- * STATUS: BrightSpot's REST Management API currently rejects every request
- * from this tenant's client with "Insufficient client permissions" (confirmed
- * not an IP/hostname/format issue — see api/_utils/brightspot.js). Until
- * that's resolved, this endpoint always returns `available: false` so the
- * frontend can fall back to manual entry instead of erroring.
- *
- * The exact query syntax for text search + type filtering below is a
- * best-effort guess (BrightSpot doesn't publicly document it) — needs
- * verifying against a real response once permissions are sorted out.
+ * Backed by BrightSpot's custom EventHubLive endpoints on the tenant's own
+ * CMS host, which return the tenant's full list rather than accepting a
+ * search term — so this endpoint fetches that list and filters it by `q`
+ * itself to give the frontend autocomplete-style suggestions:
+ *   kind=page  -> GET {cmsUrl}/eventhublive/get-all-live-videos  (Encoder Page)
+ *   kind=video -> GET {cmsUrl}/eventhublive/get-all-video-pages  (Encoder Video Page)
  */
 
 import { resolveTenantSession, getTenantBrightspotCreds } from './_utils/tenant.js'
-import { brightspotCmaFetch } from './_utils/brightspot.js'
+import { brightspotEventHubFetch, mapEventHubItems } from './_utils/brightspot.js'
 
-function mapItem(item) {
-  return {
-    id:   item._id || item.id || item['cms.content._id'] || null,
-    name: item['cms.content.searchTitle'] || item.name || item.title || item.label || null,
-  }
+const ENDPOINT_BY_KIND = {
+  page:  '/eventhublive/get-all-live-videos',
+  video: '/eventhublive/get-all-video-pages',
 }
 
 export default async function handler(req, res) {
@@ -34,22 +29,21 @@ export default async function handler(req, res) {
   const q = (req.query?.q || '').trim()
   if (!q) return res.status(200).json({ available: true, pages: [] })
 
+  const endpoint = ENDPOINT_BY_KIND[req.query?.kind] || ENDPOINT_BY_KIND.page
+
   const creds = await getTenantBrightspotCreds(session.tenantId)
   if (!creds) {
-    return res.status(200).json({ available: false, pages: [], error: 'BrightSpot is not fully configured for this tenant yet (missing Client ID)' })
+    return res.status(200).json({ available: false, pages: [], error: 'BrightSpot is not fully configured for this tenant yet' })
   }
 
   try {
-    const { ok, status, body } = await brightspotCmaFetch(
-      creds,
-      `/api/rest/cma/contents?query=${encodeURIComponent(q)}&limit=20`
-    )
+    const { ok, status, body } = await brightspotEventHubFetch(creds, endpoint)
     if (!ok) {
-      const detail = typeof body === 'string' ? body : body?.result || JSON.stringify(body)
+      const detail = typeof body === 'string' ? body : body?.error || JSON.stringify(body)
       return res.status(200).json({ available: false, pages: [], error: `BrightSpot ${status}: ${detail}` })
     }
-    const items = body?.result?.items || body?.items || (Array.isArray(body?.result) ? body.result : [])
-    const pages = items.map(mapItem).filter(p => p.id)
+    const qLower = q.toLowerCase()
+    const pages = mapEventHubItems(body).filter(p => p.name.toLowerCase().includes(qLower))
     return res.status(200).json({ available: true, pages })
   } catch (err) {
     return res.status(200).json({ available: false, pages: [], error: err.message })
