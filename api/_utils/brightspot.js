@@ -31,12 +31,20 @@ export async function brightspotCmaFetch(creds, path, opts = {}) {
 
 // BrightSpot's custom EventHubLive endpoints (get-all-live-videos,
 // get-all-video-pages) back the Encoder Page / Video Page pickers in
-// EncoderForm. Unlike the CMA above, these live on the tenant's CMS host and
-// need no client-id/secret headers — confirmed reachable with a plain GET.
+// EncoderForm. These live on the tenant's CMS host and require X-Site/
+// X-API-Key headers on every call — global for now, not yet confirmed
+// tenant-specific.
 export async function brightspotEventHubFetch(creds, path) {
   const base = creds.cmsUrl || creds.siteUrl
   const url = new URL(path, base)
-  const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } })
+  // TODO: hardcoded as a temporary workaround while the .env.local loading
+  // issue in `vercel dev` is unresolved — move back to process.env once fixed.
+  const headers = {
+    Accept:      'application/json',
+    'X-Site':    '00000197-f4ab-d96b-a597-fdff581e0000',
+    'X-API-Key': 'VeG8t7RMgIpp0LRDR7s81ZrnSuG0MAFCtNwcNQg',
+  }
+  const res = await fetch(url.toString(), { headers })
   const text = await res.text()
   let body
   try { body = JSON.parse(text) } catch { body = text }

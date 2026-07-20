@@ -1,23 +1,23 @@
 /**
- * GET /api/brightspot-search-pages?q=<term>&kind=page|video
+ * GET /api/brightspot-search-pages?kind=page|video
  *
- * Search BrightSpot for pages to assign to an encoder (Encoder Page /
- * Encoder Video Page). Backs the search dropdown in EncoderForm.
+ * Lists BrightSpot pages to assign to an encoder (Encoder Page / Encoder
+ * Video Page). Backs the picker dropdown in EncoderForm.
  *
- * Backed by BrightSpot's custom EventHubLive endpoints on the tenant's own
- * CMS host, which return the tenant's full list rather than accepting a
- * search term — so this endpoint fetches that list and filters it by `q`
- * itself to give the frontend autocomplete-style suggestions:
- *   kind=page  -> GET {cmsUrl}/eventhublive/get-all-live-videos  (Encoder Page)
- *   kind=video -> GET {cmsUrl}/eventhublive/get-all-video-pages  (Encoder Video Page)
+ * BrightSpot's custom EventHubLive endpoints don't accept a search term —
+ * they always return the tenant's full list — so this endpoint just proxies
+ * that full list back as-is. The frontend Autocomplete filters it locally
+ * as the user types.
+ *   kind=page  -> GET {cmsUrl}/api/eventhublive/get-all-live-videos  (Encoder Page)
+ *   kind=video -> GET {cmsUrl}/api/eventhublive/get-all-video-pages  (Encoder Video Page)
  */
 
 import { resolveTenantSession, getTenantBrightspotCreds } from './_utils/tenant.js'
 import { brightspotEventHubFetch, mapEventHubItems } from './_utils/brightspot.js'
 
 const ENDPOINT_BY_KIND = {
-  page:  '/eventhublive/get-all-live-videos',
-  video: '/eventhublive/get-all-video-pages',
+  page:  '/api/eventhublive/get-all-live-videos',
+  video: '/api/eventhublive/get-all-video-pages',
 }
 
 export default async function handler(req, res) {
@@ -25,9 +25,6 @@ export default async function handler(req, res) {
   const session = await resolveTenantSession(req)
   if (!session) return res.status(401).json({ error: 'Unauthorized' })
   if (!session.tenantId || !session.tenantRole) return res.status(403).json({ error: 'Not a member of this tenant' })
-
-  const q = (req.query?.q || '').trim()
-  if (!q) return res.status(200).json({ available: true, pages: [] })
 
   const endpoint = ENDPOINT_BY_KIND[req.query?.kind] || ENDPOINT_BY_KIND.page
 
@@ -42,9 +39,7 @@ export default async function handler(req, res) {
       const detail = typeof body === 'string' ? body : body?.error || JSON.stringify(body)
       return res.status(200).json({ available: false, pages: [], error: `BrightSpot ${status}: ${detail}` })
     }
-    const qLower = q.toLowerCase()
-    const pages = mapEventHubItems(body).filter(p => p.name.toLowerCase().includes(qLower))
-    return res.status(200).json({ available: true, pages })
+    return res.status(200).json({ available: true, pages: mapEventHubItems(body) })
   } catch (err) {
     return res.status(200).json({ available: false, pages: [], error: err.message })
   }
