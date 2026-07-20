@@ -161,10 +161,13 @@ export const hlsWatcherTask = task({
   maxDuration: 3600,
   run: async (payload: HlsWatcherPayload, { ctx }) => {
     const { url, interval: intervalArg, duration: durationArg, outFile } = payload;
+    const taskId = ctx.run.id;
+
+    logger.log("hls-watcher run starting", { runId: taskId, payload });
+
     if (!url) {
       throw new Error("payload.url is required");
     }
-    const taskId = ctx.run.id;
 
     const tagFilter = payload.tags?.length
       ? payload.tags.map((t) => (t.startsWith("#") ? t : `#${t}`))
@@ -178,9 +181,14 @@ export const hlsWatcherTask = task({
     // Look this run up in hls_streams purely to get tenant_id for attributing
     // this run's hls_parser_events rows. The row is expected to already
     // exist -- see the module doc comment above.
+    logger.log(`Looking up hls_streams row by current_task_id = ${taskId}`);
     const stream = await findHlsStreamByTaskId(taskId);
     if (stream) {
-      logger.log(`hls_streams row ${stream.id} matched by current_task_id ${taskId}`);
+      logger.log(`hls_streams row matched -- hls_parser_events writes are ON for this run`, {
+        streamId: stream.id,
+        streamName: stream.name,
+        tenantId: stream.tenant_id,
+      });
     } else {
       logger.warn(`No hls_streams row has current_task_id ${taskId} -- skipping hls_parser_events writes for this run`);
     }
@@ -198,9 +206,10 @@ export const hlsWatcherTask = task({
           type: record.type as string,
           occurredAt: record.timestamp as string,
           payload: record,
-        }).catch((err) => {
-          logger.error("Failed to write hls_parser_events row", { error: (err as Error).message });
-        });
+        }).then(
+          () => logger.log(`hls_parser_events row written`, { type: record.type, streamId: stream.id }),
+          (err) => logger.error("Failed to write hls_parser_events row", { error: (err as Error).message, type: record.type }),
+        );
       }
       return record;
     }
@@ -221,14 +230,21 @@ export const hlsWatcherTask = task({
       }
     }
 
+    let pollCount = 0;
+
     async function poll(mediaUrl: string) {
+      pollCount += 1;
+      logger.log(`poll #${pollCount}: fetching playlist`, { mediaUrl });
       try {
         const { data: text, finalUrl } = await fetchText(mediaUrl);
+        logger.log(`poll #${pollCount}: playlist fetched`, { bytes: text.length });
 
         const tags = extractTags(text).filter((t) => tagIsTracked(t, tagFilter));
+        let newTagCount = 0;
         for (const tag of tags) {
           if (!seenTags.has(tag)) {
             seenTags.add(tag);
+            newTagCount += 1;
             const markers = decodeDateRangeScte35(tag);
             emit({ type: "tag", tag, scte35: markers });
             logger.log(tag, { markers });
@@ -236,18 +252,30 @@ export const hlsWatcherTask = task({
         }
 
         const segmentUrls = extractSegmentUris(text, finalUrl);
+        let newSegmentCount = 0;
         for (const segmentUrl of segmentUrls) {
           if (!seenSegments.has(segmentUrl)) {
             seenSegments.add(segmentUrl);
+            newSegmentCount += 1;
             await processSegment(segmentUrl);
           }
         }
+
+        logger.log(`poll #${pollCount}: cycle complete`, {
+          newTags: newTagCount,
+          newSegments: newSegmentCount,
+          totalTagsSeen: seenTags.size,
+          totalSegmentsSeen: seenSegments.size,
+          totalEventsEmitted: events.length,
+        });
       } catch (err) {
-        logger.error("Error fetching playlist", { error: (err as Error).message });
+        logger.error(`poll #${pollCount}: error fetching playlist`, { error: (err as Error).message });
       }
     }
 
+    logger.log(`Resolving media playlist`, { url });
     const { mediaUrl, text: initialText } = await resolveMediaPlaylistUrl(url);
+    logger.log(`Media playlist resolved`, { mediaUrl });
 
     const targetDuration = extractTargetDuration(initialText);
     const pollInterval = intervalArg || targetDuration || 4;
@@ -280,20 +308,27 @@ export const hlsWatcherTask = task({
 
     await poll(mediaUrl);
 
-    const endTime = effectiveDuration !== undefined ? Date.now() + effectiveDuration * 1000 : null;
+    const startTime = Date.now();
+    const endTime = effectiveDuration !== undefined ? startTime + effectiveDuration * 1000 : null;
     while (!endTime || Date.now() < endTime) {
       await new Promise((resolve) => setTimeout(resolve, pollInterval * 1000));
       await poll(mediaUrl);
     }
 
+    logger.log(`Graceful stop reached after ${Math.round((Date.now() - startTime) / 1000)}s`, {
+      pollCount,
+      totalTagsSeen: seenTags.size,
+      totalSegmentsSeen: seenSegments.size,
+      totalEventsEmitted: events.length,
+    });
+
     if (outStream) {
+      logger.log(`Closing outFile`, { outFile });
       await new Promise<void>((resolve) => outStream.end(() => resolve()));
     }
 
-    return {
-      mediaUrl,
-      eventCount: events.length,
-      events,
-    };
+    const summary = { mediaUrl, eventCount: events.length, events };
+    logger.log("hls-watcher run finished", { mediaUrl, eventCount: events.length });
+    return summary;
   },
 });
