@@ -19,6 +19,14 @@ import { findHlsStreamByTaskId, insertHlsParserEvent } from "./supabase";
  * in hls_parser_events, tagged with tenant_id and task_id (this run's ID). If
  * no hls_streams row matches, this just logs a warning and watches the
  * stream anyway, skipping all hls_parser_events writes for the run.
+ *
+ * `payload.duration` only controls this task's own graceful poll loop below
+ * (it stops itself, closes outFile, and returns a summary). It does NOT set
+ * this run's trigger.dev maxDuration -- the caller does that separately via
+ * tasks.trigger(id, payload, { maxDuration }), as a safety-net ceiling above
+ * `duration` in case this loop never returns. If maxDuration is hit instead,
+ * trigger.dev hard-kills the run and skips all of this file's own cleanup/
+ * return value. See https://trigger.dev/docs/runs/max-duration
  */
 
 type HlsWatcherPayload = {

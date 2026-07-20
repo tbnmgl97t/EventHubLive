@@ -7,13 +7,28 @@
  *   triggering a task under a tenant they don't belong to).
  *   The run id from trigger.dev's response is saved onto current_task_id, and
  *   session_status is set to 'running' (or 'failed' if triggering itself fails).
+ *
+ * Triggered via @trigger.dev/sdk (not the raw REST endpoint) specifically to
+ * pass a per-run maxDuration override — the REST /trigger endpoint's options
+ * object doesn't support maxDuration, only the SDK's tasks.trigger() does.
+ * The task itself already exits gracefully once `duration` seconds elapse
+ * (closing its own loop cleanly and returning a summary); maxDuration here is
+ * a platform-enforced safety net set slightly above that, in case the
+ * graceful loop never returns (e.g. a hung fetch) — trigger.dev will hard-kill
+ * the run at that point, but note it then skips the task's own cleanup and
+ * return value entirely. See https://trigger.dev/docs/runs/max-duration
  */
 
 import { resolveTenantSession } from './_utils/tenant.js'
 import { canWrite }              from './_utils/auth.js'
 import { hlsParserDb }            from './_utils/supabase.js'
+import { tasks }                 from '@trigger.dev/sdk/v3'
 
 const TRIGGER_TASK_ID = 'hls-watcher'
+// Grace period added on top of the requested duration before trigger.dev's
+// own maxDuration kill-switch fires, so the task's graceful exit gets to run
+// first under normal conditions.
+const MAX_DURATION_BUFFER_SECONDS = 30
 
 export default async function handler(req, res) {
   const session = await resolveTenantSession(req)
@@ -54,21 +69,12 @@ export default async function handler(req, res) {
     let triggerError = null
     let runId = null
     try {
-      const triggerRes = await fetch(`https://api.trigger.dev/api/v1/tasks/${TRIGGER_TASK_ID}/trigger`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${process.env.TRIGGER_SECRET_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          payload: { streamId: stream.id, url, duration, tenantId: session.tenantId, name },
-        }),
-      })
-      const triggerData = await triggerRes.json().catch(() => null)
-      if (!triggerRes.ok) {
-        throw new Error(`trigger.dev returned ${triggerRes.status}: ${JSON.stringify(triggerData)}`)
-      }
-      runId = triggerData?.id || null
+      const handle = await tasks.trigger(
+        TRIGGER_TASK_ID,
+        { streamId: stream.id, url, duration, tenantId: session.tenantId, name },
+        duration ? { maxDuration: duration + MAX_DURATION_BUFFER_SECONDS } : {},
+      )
+      runId = handle.id
     } catch (err) {
       triggerOk = false
       triggerError = err.message
