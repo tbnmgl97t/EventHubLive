@@ -10,7 +10,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@trigger.dev/sdk": "^4.5.4"
+    "@trigger.dev/sdk": "^4.5.5"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

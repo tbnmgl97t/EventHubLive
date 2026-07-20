@@ -21,8 +21,9 @@ import { findHlsStreamByTaskId, insertHlsParserEvent } from "./supabase";
  * stream anyway, skipping all hls_parser_events writes for the run.
  *
  * `payload.duration` only controls this task's own graceful poll loop below
- * (it stops itself, closes outFile, and returns a summary). It does NOT set
- * this run's trigger.dev maxDuration -- the caller does that separately via
+ * (it actually stops itself a minute early, at `duration - 60s`, then closes
+ * outFile and returns a summary). It does NOT set this run's trigger.dev
+ * maxDuration -- the caller does that separately via
  * tasks.trigger(id, payload, { maxDuration }), as a safety-net ceiling above
  * `duration` in case this loop never returns. If maxDuration is hit instead,
  * trigger.dev hard-kills the run and skips all of this file's own cleanup/
@@ -33,7 +34,7 @@ type HlsWatcherPayload = {
   url: string;
   /** Poll interval in seconds. Defaults to the playlist's EXT-X-TARGETDURATION, or 4s. */
   interval?: number;
-  /** Stop after this many seconds. If omitted, runs until the task's maxDuration is hit. */
+  /** Stop 1 minute before this many seconds elapse, to exit gracefully with headroom. If omitted, runs until the task's maxDuration is hit. */
   duration?: number;
   /** Only track these tag names, e.g. ["EXT-X-CUE-OUT", "EXT-X-DATERANGE"]. Defaults to all #EXT-X-* tags. */
   tags?: string[];
@@ -260,12 +261,26 @@ export const hlsWatcherTask = task({
       logger.log(`Tracking only these tags: ${tagFilter.join(", ")}`);
     }
 
-    const stopMessage = durationArg ? `for ${durationArg}s` : "until this task's maxDuration is reached";
+    // Stop polling a minute before the requested duration, not at it -- this
+    // leaves headroom for the graceful-shutdown work below (closing outFile,
+    // returning the events summary) to finish comfortably before the
+    // caller's platform-enforced maxDuration safety net (duration + 30s,
+    // see api/hls-watcher-streams.js in the main app repo) could hard-kill
+    // the run mid-cleanup. Durations under a minute just stop after the
+    // first poll rather than going negative.
+    const GRACEFUL_STOP_BUFFER_SECONDS = 60;
+    const effectiveDuration =
+      durationArg !== undefined ? Math.max(durationArg - GRACEFUL_STOP_BUFFER_SECONDS, 0) : undefined;
+
+    const stopMessage =
+      effectiveDuration !== undefined
+        ? `for ${effectiveDuration}s (1 minute before the requested ${durationArg}s, to exit gracefully)`
+        : "until this task's maxDuration is reached";
     logger.log(`Watching ${mediaUrl} every ${pollInterval}s, ${stopMessage}.`);
 
     await poll(mediaUrl);
 
-    const endTime = durationArg ? Date.now() + durationArg * 1000 : null;
+    const endTime = effectiveDuration !== undefined ? Date.now() + effectiveDuration * 1000 : null;
     while (!endTime || Date.now() < endTime) {
       await new Promise((resolve) => setTimeout(resolve, pollInterval * 1000));
       await poll(mediaUrl);
