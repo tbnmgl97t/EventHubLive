@@ -44,7 +44,7 @@ function SsaiPreviewPlayer({ url }) {
     let cancelled = false
     loadJWPlayerScript().then(jwplayer => {
       if (cancelled || !containerRef.current) return
-      playerRef.current = jwplayer(playerDivId).setup({ file: url, width: '100%', aspectratio: '16:9' })
+      playerRef.current = jwplayer(playerDivId).setup({ file: url, width: 400, aspectratio: '16:9' })
     }).catch(err => console.error('JW Player failed to load:', err))
 
     return () => {
@@ -56,7 +56,7 @@ function SsaiPreviewPlayer({ url }) {
     }
   }, [url])
 
-  return <div id={playerDivId} ref={containerRef} style={{ width: '100%', maxWidth: 640 }} />
+  return <div id={playerDivId} ref={containerRef} style={{ width: 400 }} />
 }
 
 export default function HlsStreamTracker({ token, tenantId }) {
