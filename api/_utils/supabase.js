@@ -11,3 +11,9 @@ if (!url || !key) {
 export const supabase = createClient(url, key, {
   auth: { persistSession: false },
 })
+
+// Client scoped to the hlsparser schema (HLS segment/SCTE-35 parser events).
+export const hlsParserDb = createClient(url, key, {
+  db: { schema: 'hlsparser' },
+  auth: { persistSession: false },
+})
