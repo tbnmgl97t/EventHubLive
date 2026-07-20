@@ -15,6 +15,7 @@ export default function HlsStreamForm({ token, tenantId }) {
   const navigate = useNavigate()
   const [name, setName] = useState('')
   const [manifestUrl, setManifestUrl] = useState('')
+  const [duration, setDuration] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [createdId, setCreatedId] = useState(null)
@@ -27,7 +28,10 @@ export default function HlsStreamForm({ token, tenantId }) {
       const res = await fetch('/api/hls-watcher-streams', {
         method: 'POST',
         headers: authHeader(token, tenantId),
-        body: JSON.stringify({ name, manifest_url: manifestUrl }),
+        body: JSON.stringify({
+          name, url: manifestUrl,
+          ...(duration ? { duration: Number(duration) } : {}),
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to create stream')
@@ -55,6 +59,10 @@ export default function HlsStreamForm({ token, tenantId }) {
         <TextField
           label="Manifest URL" value={manifestUrl} onChange={e => setManifestUrl(e.target.value)}
           required size="small" placeholder="https://example.com/live/stream.m3u8"
+        />
+        <TextField
+          label="Duration (seconds)" value={duration} onChange={e => setDuration(e.target.value)}
+          type="number" size="small" placeholder="Leave blank to run until stopped"
         />
         <Button type="submit" variant="contained" disabled={submitting}>
           {submitting ? <CircularProgress size={20} /> : 'Add Stream'}

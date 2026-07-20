@@ -72,7 +72,10 @@ export default function HlsStreamTracker() {
         <Chip size="small" label={stream.session_status || 'not started'} />
         {stream.current_task_id && <Chip size="small" variant="outlined" label={`task: ${stream.current_task_id}`} />}
       </Box>
-      <Typography sx={{ color: '#94a3b8', fontSize: '0.8rem' }}>{stream.manifest_url}</Typography>
+      <Typography sx={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+        {stream.manifest_url}
+        {stream.duration_seconds ? ` · duration: ${stream.duration_seconds}s` : ''}
+      </Typography>
 
       {!stream.current_task_id ? (
         <Alert severity="info">No task has run for this stream yet.</Alert>

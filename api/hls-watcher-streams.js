@@ -1,7 +1,10 @@
 /**
  * GET  /api/hls-watcher-streams          -> list this tenant's hls_streams
- * POST /api/hls-watcher-streams { name, manifest_url } -> create a stream row
- *   and trigger the trigger.dev 'hls-watcher' task with { streamId, manifestUrl }.
+ * POST /api/hls-watcher-streams { name, url, duration } -> create a stream row
+ *   and trigger the trigger.dev 'hls-watcher' task with
+ *   { streamId, url, duration, tenantId, name } (tenantId always comes from
+ *   the resolved session, never the request body, to prevent a caller from
+ *   triggering a task under a tenant they don't belong to).
  *   The run id from trigger.dev's response is saved onto current_task_id, and
  *   session_status is set to 'running' (or 'failed' if triggering itself fails).
  */
@@ -32,14 +35,17 @@ export default async function handler(req, res) {
   if (!canWrite(session)) return res.status(403).json({ error: 'Forbidden' })
 
   if (req.method === 'POST') {
-    const { name, manifest_url } = req.body || {}
-    if (!name || !manifest_url) {
-      return res.status(400).json({ error: 'name and manifest_url are required' })
+    const { name, url, duration } = req.body || {}
+    if (!name || !url) {
+      return res.status(400).json({ error: 'name and url are required' })
+    }
+    if (duration !== undefined && (typeof duration !== 'number' || duration <= 0)) {
+      return res.status(400).json({ error: 'duration must be a positive number of seconds' })
     }
 
     const { data: stream, error: insertError } = await hlsParserDb
       .from('hls_streams')
-      .insert({ tenant_id: session.tenantId, name, manifest_url })
+      .insert({ tenant_id: session.tenantId, name, manifest_url: url, duration_seconds: duration ?? null })
       .select()
       .single()
     if (insertError) return res.status(500).json({ error: insertError.message })
@@ -54,7 +60,9 @@ export default async function handler(req, res) {
           Authorization: `Bearer ${process.env.TRIGGER_SECRET_KEY}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ payload: { streamId: stream.id, manifestUrl: manifest_url } }),
+        body: JSON.stringify({
+          payload: { streamId: stream.id, url, duration, tenantId: session.tenantId, name },
+        }),
       })
       const triggerData = await triggerRes.json().catch(() => null)
       if (!triggerRes.ok) {
