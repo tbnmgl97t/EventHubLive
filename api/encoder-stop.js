@@ -8,17 +8,46 @@
  *    JW returns one.
  */
 
-import { resolveTenantSession, getTenantJwCreds } from './_utils/tenant.js'
+import { resolveTenantSession, getTenantJwCreds, getTenantBrightspotCreds } from './_utils/tenant.js'
 import { canWrite }             from './_utils/auth.js'
 import { supabase }             from './_utils/supabase.js'
 import { youtubeRequest }       from './_utils/youtube.js'
 import { patchSchedule }        from './_utils/fast-channels.js'
+import { getEncoderBrightspotPages, updateEventHubVideoPageTitle } from './_utils/brightspot.js'
 
-// TODO: Replace with real BrightSpot unpublish API call — mirror of the
-// publish stub in encoder-go-live.js, once that endpoint is confirmed.
+// Restores the BrightSpot VideoPage title to whatever it was before
+// encoder-go-live.js's publishToBrightSpot overwrote it, then clears the
+// stashed value so it doesn't leak into the next broadcast.
+//
+// TODO: ViewNexaVideo (sponsorText/standaloneWeather) update isn't wired up
+// yet — this only covers the VideoPage title for now.
 async function unpublishFromBrightSpot(tenant, encoder) {
-  console.log(`[BrightSpot STUB] Would unpublish stream "${encoder.name}" from ${tenant.brightspot_cms_url}`)
-  return { success: true, stub: true }
+  const creds = await getTenantBrightspotCreds(encoder.tenant_id)
+  if (!creds) {
+    console.log(`[BrightSpot] Skipping unpublish for encoder ${encoder.id} — not configured for this tenant`)
+    return { success: true, skipped: true }
+  }
+
+  const { videoPageId } = await getEncoderBrightspotPages(encoder.tenant_id, encoder)
+  if (!videoPageId) {
+    console.log(`[BrightSpot] Skipping unpublish for encoder ${encoder.id} — no video page assigned`)
+    return { success: true, skipped: true }
+  }
+
+  // brightspot_original_headline is null both when nothing was ever captured
+  // and when go-live's read genuinely found no prior title — either way,
+  // writing an empty string here would erase real content on BrightSpot's
+  // side, so skip the restore call entirely rather than blank the page.
+  if (encoder.brightspot_original_headline == null) {
+    console.log(`[BrightSpot] Skipping title restore for encoder ${encoder.id} — no original title was captured`)
+    return { success: true, skipped: true }
+  }
+
+  const { ok, status, body } = await updateEventHubVideoPageTitle(creds, videoPageId, encoder.brightspot_original_headline)
+  if (!ok) console.error(`[BrightSpot] update-videopage-heading (restore) failed (${status}):`, body)
+
+  await supabase.from('encoders').update({ brightspot_original_headline: null }).eq('id', encoder.id)
+  return { success: ok, stub: false }
 }
 
 // TODO: Replace with real BrightSpot MRSS disable call — mirror of the

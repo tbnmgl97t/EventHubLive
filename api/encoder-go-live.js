@@ -8,22 +8,53 @@
  * can show which succeeded and which need attention.
  */
 
-import { resolveTenantSession } from './_utils/tenant.js'
+import { resolveTenantSession, getTenantBrightspotCreds } from './_utils/tenant.js'
 import { canWrite }             from './_utils/auth.js'
 import { supabase }             from './_utils/supabase.js'
 import { youtubeRequest }       from './_utils/youtube.js'
 import { patchSchedule }        from './_utils/fast-channels.js'
 import { randomUUID }           from 'node:crypto'
+import {
+  getEncoderBrightspotPages,
+  getEventHubVideoPageTitle,
+  updateEventHubVideoPageTitle,
+  updateEventHubVideo,
+} from './_utils/brightspot.js'
 
-// TODO: Replace with real BrightSpot publish API call
-// The BrightSpot REST endpoint to publish a live stream article is not yet confirmed.
-// Expected call: POST {brightspot_cms_url}/api/editorial/live-streams with the JW channel embed
-// code and `title` as the article's headline/asset title.
-// For now, log the intent and return success so the rest of orchestration proceeds.
+// Overwrites the encoder's assigned BrightSpot ViewNexaVideo's sponsorText
+// with the broadcast title, and its VideoPage title, stashing the VideoPage's
+// current title on the encoder row first so encoder-stop.js can restore it
+// once the broadcast ends.
 async function publishToBrightSpot(tenant, encoder, title) {
-  console.log(`[BrightSpot STUB] Would publish stream "${title}" to ${tenant.brightspot_cms_url}`)
-  // When real API is known, call brightspot-proxy with the correct endpoint + payload
-  return { success: true, stub: true }
+  const creds = await getTenantBrightspotCreds(encoder.tenant_id)
+  if (!creds) {
+    console.log(`[BrightSpot] Skipping publish for encoder ${encoder.id} — not configured for this tenant`)
+    return { success: true, skipped: true }
+  }
+
+  const { pageId, videoPageId } = await getEncoderBrightspotPages(encoder.tenant_id, encoder)
+  console.log(`[BrightSpot] encoder "${encoder.name}" (${encoder.id}) -> brightspot_page_id=${pageId} brightspot_video_page_id=${videoPageId}`)
+
+  if (pageId) {
+    const { ok, status, body } = await updateEventHubVideo(creds, pageId, { standaloneWeather: false, title })
+    if (!ok) console.error(`[BrightSpot] update-video failed (${status}):`, body)
+  }
+
+  if (!videoPageId) {
+    console.log(`[BrightSpot] Skipping video page publish for encoder ${encoder.id} — no video page assigned`)
+    return { success: true, skipped: !pageId }
+  }
+
+  const { ok: readOk, status: readStatus, title: originalTitle } = await getEventHubVideoPageTitle(creds, videoPageId)
+  if (!readOk) {
+    console.error(`[BrightSpot] get-video-page-by-id failed (${readStatus}) for encoder ${encoder.id}`)
+  } else {
+    await supabase.from('encoders').update({ brightspot_original_headline: originalTitle }).eq('id', encoder.id)
+  }
+
+  const { ok, status, body } = await updateEventHubVideoPageTitle(creds, videoPageId, title)
+  if (!ok) console.error(`[BrightSpot] update-videopage-heading failed (${status}):`, body)
+  return { success: ok, stub: false }
 }
 
 // TODO: Replace with real BrightSpot MRSS enable call
