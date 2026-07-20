@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Routes, Route } from 'react-router-dom'
 import EHLLogo from './EHLLogo'
 import EncoderControl from './EncoderControl'
 import HlsWatcher from './HlsWatcher'
+import HlsStreamForm from './HlsStreamForm'
 import HlsStreamTracker from './HlsStreamTracker'
 import EncoderList from './EncoderList'
 import EncoderForm from './EncoderForm'
@@ -6070,6 +6071,7 @@ function Dashboard({ token, tenantId, tenantName, userEmail, isSuperAdmin, tenan
             <Box sx={{ p: { xs: 1, sm: 2 } }}>
               <Routes>
                 <Route index element={<HlsWatcher token={token} tenantId={tenantId} readOnly={isReadOnly} />} />
+                <Route path="new" element={<HlsStreamForm token={token} tenantId={tenantId} />} />
                 <Route path=":id" element={<HlsStreamTracker />} />
               </Routes>
             </Box>
