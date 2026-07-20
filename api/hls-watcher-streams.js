@@ -27,6 +27,10 @@
  * empty string short-circuits that lookup so the call targets whichever
  * environment TRIGGER_SECRET_KEY itself belongs to (dev/prod), same as the
  * plain REST endpoint did before this switched to the SDK.
+ *
+ * session_status is kept in sync with trigger.dev's real run status by
+ * api/cron-sync-hls-status.js, not by anything in this file after the
+ * initial trigger-time write above.
  */
 
 import { resolveTenantSession } from './_utils/tenant.js'
