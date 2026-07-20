@@ -17,6 +17,16 @@
  * graceful loop never returns (e.g. a hung fetch) — trigger.dev will hard-kill
  * the run at that point, but note it then skips the task's own cleanup and
  * return value entirely. See https://trigger.dev/docs/runs/max-duration
+ *
+ * clientConfig.previewBranch is forced to '' on every call below because the
+ * SDK auto-detects a git branch from VERCEL_GIT_COMMIT_REF (set on every
+ * Vercel deployment, preview or production) and otherwise tries to scope the
+ * trigger to a trigger.dev "preview branch" environment matching that branch
+ * name — which we don't use, and which 404s with "No matching branch env"
+ * since no such branch environment exists in this trigger.dev project. An
+ * empty string short-circuits that lookup so the call targets whichever
+ * environment TRIGGER_SECRET_KEY itself belongs to (dev/prod), same as the
+ * plain REST endpoint did before this switched to the SDK.
  */
 
 import { resolveTenantSession } from './_utils/tenant.js'
@@ -73,6 +83,7 @@ export default async function handler(req, res) {
         TRIGGER_TASK_ID,
         { streamId: stream.id, url, duration, tenantId: session.tenantId, name },
         duration ? { maxDuration: duration + MAX_DURATION_BUFFER_SECONDS } : {},
+        { clientConfig: { previewBranch: '' } },
       )
       runId = handle.id
     } catch (err) {
