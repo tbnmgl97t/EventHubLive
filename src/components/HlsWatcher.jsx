@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
-  Box, Typography, Button, CircularProgress, Alert,
+  Box, Typography, Button, CircularProgress, Alert, Select, MenuItem,
   Table, TableHead, TableBody, TableRow, TableCell,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
@@ -13,6 +13,51 @@ function authHeader(token, tenantId) {
     'Content-Type': 'application/json',
     ...(tenantId ? { 'X-Tenant-Id': tenantId } : {}),
   }
+}
+
+// Manual override only -- the hls-watcher task never writes its status back
+// once it finishes, fails, or expires on trigger.dev, so this is a stopgap
+// until that's synced automatically (e.g. a cron job polling trigger.dev).
+const STATUS_OPTIONS = ['not_started', 'running', 'completed', 'failed', 'stopped']
+
+function StatusSelect({ stream, token, tenantId, onUpdated, disabled }) {
+  const [saving, setSaving] = useState(false)
+  const value = stream.session_status || 'not_started'
+
+  async function handleChange(e) {
+    const nextStatus = e.target.value
+    setSaving(true)
+    try {
+      const res = await fetch('/api/hls-watcher-streams', {
+        method: 'PATCH',
+        headers: authHeader(token, tenantId),
+        body: JSON.stringify({ id: stream.id, session_status: nextStatus }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to update status')
+      onUpdated(data)
+    } catch (err) {
+      alert(`Failed to update status: ${err.message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Select
+      value={value}
+      onChange={handleChange}
+      size="small"
+      disabled={disabled || saving}
+      sx={{ fontSize: '0.8rem', minWidth: 130 }}
+    >
+      {STATUS_OPTIONS.map(opt => (
+        <MenuItem key={opt} value={opt} sx={{ fontSize: '0.8rem' }}>
+          {opt === 'not_started' ? 'not started' : opt}
+        </MenuItem>
+      ))}
+    </Select>
+  )
 }
 
 export default function HlsWatcher({ token, tenantId, readOnly }) {
@@ -37,6 +82,10 @@ export default function HlsWatcher({ token, tenantId, readOnly }) {
   }
 
   useEffect(() => { fetchStreams() }, [])
+
+  function handleStatusUpdated(updatedStream) {
+    setStreams(prev => prev.map(s => (s.id === updatedStream.id ? updatedStream : s)))
+  }
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -89,7 +138,9 @@ export default function HlsWatcher({ token, tenantId, readOnly }) {
               <TableRow key={s.id}>
                 <TableCell>{s.name}</TableCell>
                 <TableCell sx={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.manifest_url}</TableCell>
-                <TableCell>{s.session_status || 'not started'}</TableCell>
+                <TableCell>
+                  <StatusSelect stream={s} token={token} tenantId={tenantId} onUpdated={handleStatusUpdated} disabled={readOnly} />
+                </TableCell>
                 <TableCell><Link to={`/admin/hlswatcher/${s.id}`}>Track</Link></TableCell>
               </TableRow>
             ))}

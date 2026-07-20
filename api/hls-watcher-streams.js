@@ -27,6 +27,15 @@
  * empty string short-circuits that lookup so the call targets whichever
  * environment TRIGGER_SECRET_KEY itself belongs to (dev/prod), same as the
  * plain REST endpoint did before this switched to the SDK.
+ *
+ * PATCH /api/hls-watcher-streams { id, session_status } -> manually override
+ * a stream's status. The hls-watcher task never writes back to hls_streams
+ * once it starts (see its module doc comment), so a run that finishes,
+ * fails, or expires on trigger.dev leaves session_status stuck at whatever
+ * it was set to at trigger time — this is a manual stopgap for correcting
+ * that until there's an automated sync (e.g. a cron job polling trigger.dev's
+ * run status). 'not_started' is accepted as a request value and stored as a
+ * null column, matching how a stream with no status is displayed.
  */
 
 import { resolveTenantSession } from './_utils/tenant.js'
@@ -39,6 +48,8 @@ const TRIGGER_TASK_ID = 'hls-watcher'
 // own maxDuration kill-switch fires, so the task's graceful exit gets to run
 // first under normal conditions.
 const MAX_DURATION_BUFFER_SECONDS = 30
+
+const MANUAL_STATUSES = ['running', 'completed', 'failed', 'stopped', 'not_started']
 
 export default async function handler(req, res) {
   const session = await resolveTenantSession(req)
@@ -105,6 +116,25 @@ export default async function handler(req, res) {
     if (updateError) console.error('[hls-watcher-streams] failed to record task id:', updateError.message)
 
     return res.status(200).json({ ...(updatedStream || stream), trigger_ok: triggerOk, trigger_error: triggerError })
+  }
+
+  if (req.method === 'PATCH') {
+    const { id, session_status: status } = req.body || {}
+    if (!id) return res.status(400).json({ error: 'id is required' })
+    if (!MANUAL_STATUSES.includes(status)) {
+      return res.status(400).json({ error: `session_status must be one of: ${MANUAL_STATUSES.join(', ')}` })
+    }
+
+    const { data, error } = await hlsParserDb
+      .from('hls_streams')
+      .update({ session_status: status === 'not_started' ? null : status })
+      .eq('id', id)
+      .eq('tenant_id', session.tenantId)
+      .select()
+      .single()
+    if (error) return res.status(500).json({ error: error.message })
+    if (!data) return res.status(404).json({ error: 'Stream not found' })
+    return res.status(200).json(data)
   }
 
   return res.status(405).end()
