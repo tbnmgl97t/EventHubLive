@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useLocation, Routes, Route } from 'react-router-dom'
 import EHLLogo from './EHLLogo'
 import EncoderControl from './EncoderControl'
+import HlsWatcher from './HlsWatcher'
+import HlsStreamTracker from './HlsStreamTracker'
 import EncoderList from './EncoderList'
 import EncoderForm from './EncoderForm'
 import { CdnRecordsPanel, PricingPanel } from './CostsExtras'
@@ -4900,6 +4902,7 @@ const PATH_MAP = {
   '/admin/events':      { activeTab: 'dashboard',    dashboardView: 'events'  },
   '/admin/encoders':    { activeTab: 'encoders',     dashboardView: 'streams' },
   '/admin/routers':     { activeTab: 'routers',      dashboardView: 'streams' },
+  '/admin/hlswatcher':  { activeTab: 'hlswatcher',   dashboardView: 'streams' },
   '/admin/costs':       { activeTab: 'costs',        dashboardView: 'streams' },
   '/admin/settings':    { activeTab: 'settings',     dashboardView: 'streams' },
   '/admin/tenants':     { activeTab: 'tenants',      dashboardView: 'streams' },
@@ -4910,6 +4913,7 @@ function tabToPath(tab, view) {
   if (tab === 'dashboard')   return view === 'events' ? '/admin/events' : '/admin/streams'
   if (tab === 'encoders')    return '/admin/encoders'
   if (tab === 'routers')     return '/admin/routers'
+  if (tab === 'hlswatcher')  return '/admin/hlswatcher'
   if (tab === 'costs')       return '/admin/costs'
   if (tab === 'settings')    return '/admin/settings'
   if (tab === 'tenants')     return '/admin/tenants'
@@ -4946,7 +4950,9 @@ function Dashboard({ token, tenantId, tenantName, userEmail, isSuperAdmin, tenan
   const [createStreamKey, setCreateStreamKey]   = useState(0)
   const [selectedChannel, setSelectedChannel]   = useState(null)
   const { activeTab, dashboardView } = PATH_MAP[location.pathname]
-    || (location.pathname.startsWith('/admin/encoders') ? { activeTab: 'encoders', dashboardView: 'streams' } : { activeTab: 'dashboard', dashboardView: 'streams' })
+    || (location.pathname.startsWith('/admin/encoders') ? { activeTab: 'encoders', dashboardView: 'streams' }
+    : location.pathname.startsWith('/admin/hlswatcher') ? { activeTab: 'hlswatcher', dashboardView: 'streams' }
+    : { activeTab: 'dashboard', dashboardView: 'streams' })
   const [streamFilter,     setStreamFilter]     = useState('all')
   const [streamTypeFilter, setStreamTypeFilter] = useState('all')
   const [previewDialog, setPreviewDialog] = useState({ open: false, channelName: '', streamUrl: '' })
@@ -5292,6 +5298,7 @@ function Dashboard({ token, tenantId, tenantName, userEmail, isSuperAdmin, tenan
       { label: 'Live Streams',    tab: 'dashboard', view: 'streams', count: channels.length },
       { label: 'Encoders',        tab: 'encoders',  view: null },
       { label: 'Routers',         tab: 'routers',   view: null },
+      { label: 'HLS Watcher',     tab: 'hlswatcher', view: null },
     ]},
     ...(isReadOnly ? [] : [{ section: 'SYSTEM', items: [
       { label: 'Settings', tab: 'settings', view: null },
@@ -6056,6 +6063,15 @@ function Dashboard({ token, tenantId, tenantName, userEmail, isSuperAdmin, tenan
                 <Typography sx={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff' }}>Routers</Typography>
                 <Typography sx={{ fontSize: '0.8rem', color: AP.muted, fontStyle: 'italic' }}>Coming soon</Typography>
               </Box>
+            </Box>
+          )}
+
+          {activeTab === 'hlswatcher' && (
+            <Box sx={{ p: { xs: 1, sm: 2 } }}>
+              <Routes>
+                <Route index element={<HlsWatcher token={token} tenantId={tenantId} readOnly={isReadOnly} />} />
+                <Route path=":id" element={<HlsStreamTracker />} />
+              </Routes>
             </Box>
           )}
 
