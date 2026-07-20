@@ -1,10 +1,12 @@
 /**
  * GET  /api/hls-watcher-streams          -> list this tenant's hls_streams
- * POST /api/hls-watcher-streams { name, url, duration } -> create a stream row
- *   and trigger the trigger.dev 'hls-watcher' task with
+ * POST /api/hls-watcher-streams { name, url, duration, ad_config_id } -> create
+ *   a stream row and trigger the trigger.dev 'hls-watcher' task with
  *   { streamId, url, duration, tenantId, name } (tenantId always comes from
  *   the resolved session, never the request body, to prevent a caller from
- *   triggering a task under a tenant they don't belong to).
+ *   triggering a task under a tenant they don't belong to). ad_config_id is
+ *   stored on the row only — the task doesn't need it, it's read later by
+ *   api/hls-watcher-ssai-url.js to build a preview URL on the monitoring screen.
  *   The run id from trigger.dev's response is saved onto current_task_id, and
  *   session_status is set to 'running' (or 'failed' if triggering itself fails).
  *
@@ -64,7 +66,7 @@ export default async function handler(req, res) {
   if (!canWrite(session)) return res.status(403).json({ error: 'Forbidden' })
 
   if (req.method === 'POST') {
-    const { name, url, duration } = req.body || {}
+    const { name, url, duration, ad_config_id: adConfigId } = req.body || {}
     if (!name || !url) {
       return res.status(400).json({ error: 'name and url are required' })
     }
@@ -74,7 +76,10 @@ export default async function handler(req, res) {
 
     const { data: stream, error: insertError } = await hlsParserDb
       .from('hls_streams')
-      .insert({ tenant_id: session.tenantId, name, manifest_url: url, duration_seconds: duration ?? null })
+      .insert({
+        tenant_id: session.tenantId, name, manifest_url: url,
+        duration_seconds: duration ?? null, ad_config_id: adConfigId || null,
+      })
       .select()
       .single()
     if (insertError) return res.status(500).json({ error: insertError.message })

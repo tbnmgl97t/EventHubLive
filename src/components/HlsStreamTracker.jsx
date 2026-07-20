@@ -1,14 +1,71 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { Box, Typography, Chip, Alert, CircularProgress, Table, TableHead, TableBody, TableRow, TableCell } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { supabase } from '../lib/supabaseClient'
 
-export default function HlsStreamTracker() {
+const JW_PLAYER_LIB = 'https://cdn.jwplayer.com/libraries/xJKVL03e.js'
+
+function authHeader(token, tenantId) {
+  return {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    ...(tenantId ? { 'X-Tenant-Id': tenantId } : {}),
+  }
+}
+
+function loadJWPlayerScript() {
+  return new Promise((resolve, reject) => {
+    if (window.jwplayer) { resolve(window.jwplayer); return }
+    const existing = document.querySelector(`script[src="${JW_PLAYER_LIB}"]`)
+    if (existing) {
+      existing.addEventListener('load', () => resolve(window.jwplayer))
+      existing.addEventListener('error', reject)
+      return
+    }
+    const script = document.createElement('script')
+    script.src = JW_PLAYER_LIB
+    script.async = true
+    script.onload = () => resolve(window.jwplayer)
+    script.onerror = reject
+    document.head.appendChild(script)
+  })
+}
+
+// Embeds a JW Player preview for the stream's SSAI-enabled manifest URL —
+// only rendered once the stream has an ad_config_id and the URL fetch
+// succeeds (see the ssaiUrl effect below).
+function SsaiPreviewPlayer({ url }) {
+  const containerRef = useRef(null)
+  const playerRef = useRef(null)
+  const playerDivId = 'jw-player-ssai-preview'
+
+  useEffect(() => {
+    let cancelled = false
+    loadJWPlayerScript().then(jwplayer => {
+      if (cancelled || !containerRef.current) return
+      playerRef.current = jwplayer(playerDivId).setup({ file: url, width: '100%', aspectratio: '16:9' })
+    }).catch(err => console.error('JW Player failed to load:', err))
+
+    return () => {
+      cancelled = true
+      if (playerRef.current) {
+        try { playerRef.current.remove() } catch (_) {}
+        playerRef.current = null
+      }
+    }
+  }, [url])
+
+  return <div id={playerDivId} ref={containerRef} style={{ width: '100%', maxWidth: 640 }} />
+}
+
+export default function HlsStreamTracker({ token, tenantId }) {
   const { id } = useParams()
   const [stream, setStream] = useState(null)
   const [events, setEvents] = useState([])
   const [error, setError] = useState('')
+  const [ssaiUrl, setSsaiUrl] = useState(null)
+  const [ssaiError, setSsaiError] = useState('')
 
   // Stream row: fetched once, then kept live via Realtime.
   useEffect(() => {
@@ -59,6 +116,21 @@ export default function HlsStreamTracker() {
     return () => { cancelled = true; supabase.removeChannel(channel) }
   }, [stream?.current_task_id])
 
+  // SSAI preview URL: only fetched once the stream has an ad_config_id.
+  useEffect(() => {
+    setSsaiUrl(null)
+    setSsaiError('')
+    if (!stream?.ad_config_id) return
+
+    fetch(`/api/hls-watcher-ssai-url?id=${id}`, { headers: authHeader(token, tenantId) })
+      .then(res => res.json().then(data => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error(data.error || 'Failed to get SSAI preview URL')
+        setSsaiUrl(data.url)
+      })
+      .catch(err => setSsaiError(err.message))
+  }, [id, stream?.ad_config_id, token, tenantId])
+
   if (error) return <Alert severity="error">{error}</Alert>
   if (!stream) return <CircularProgress size={20} />
 
@@ -76,6 +148,14 @@ export default function HlsStreamTracker() {
         {stream.manifest_url}
         {stream.duration_seconds ? ` · duration: ${stream.duration_seconds}s` : ''}
       </Typography>
+
+      {stream.ad_config_id && (
+        <Box>
+          <Typography sx={{ fontSize: '0.75rem', color: '#94a3b8', mb: 1 }}>SSAI Preview</Typography>
+          {ssaiError && <Alert severity="warning">{ssaiError}</Alert>}
+          {!ssaiError && (ssaiUrl ? <SsaiPreviewPlayer url={ssaiUrl} /> : <CircularProgress size={20} />)}
+        </Box>
+      )}
 
       {!stream.current_task_id ? (
         <Alert severity="info">No task has run for this stream yet.</Alert>

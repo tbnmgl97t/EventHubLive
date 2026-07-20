@@ -6072,7 +6072,7 @@ function Dashboard({ token, tenantId, tenantName, userEmail, isSuperAdmin, tenan
               <Routes>
                 <Route index element={<HlsWatcher token={token} tenantId={tenantId} readOnly={isReadOnly} />} />
                 <Route path="new" element={<HlsStreamForm token={token} tenantId={tenantId} />} />
-                <Route path=":id" element={<HlsStreamTracker />} />
+                <Route path=":id" element={<HlsStreamTracker token={token} tenantId={tenantId} />} />
               </Routes>
             </Box>
           )}
