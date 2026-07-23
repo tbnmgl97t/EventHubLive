@@ -17,15 +17,20 @@ import { randomUUID }           from 'node:crypto'
 import {
   getEncoderBrightspotPages,
   getEventHubVideoPageTitle,
-  updateEventHubVideoPageTitle,
-  updateEventHubVideo,
+  updateVideoPage,
+  updateViewNexaVideo,
 } from './_utils/brightspot.js'
 
-// Overwrites the encoder's assigned BrightSpot ViewNexaVideo's sponsorText
-// with the broadcast title, and its VideoPage title, stashing the VideoPage's
-// current title on the encoder row first so encoder-stop.js can restore it
-// once the broadcast ends.
-async function publishToBrightSpot(tenant, encoder, title) {
+// Sets the encoder's assigned BrightSpot ViewNexaVideo live (isLiveNowOverride
+// + standaloneWeather) and overwrites its VideoPage title with the broadcast
+// title, stashing the VideoPage's current title on the encoder row first so
+// encoder-stop.js can restore it once the broadcast ends. ViewNexaVideo's own
+// title is intentionally left untouched — only its live-state flags change.
+//
+// standaloneWeather is derived from whether "Weather Livestream" (the `app`
+// destination) is also active for this broadcast — standaloneWeather is what actually 
+// decides whether the broadcast goes into the app.
+async function publishToBrightSpot(tenant, encoder, title, destinations) {
   const creds = await getTenantBrightspotCreds(encoder.tenant_id)
   if (!creds) {
     console.log(`[BrightSpot] Skipping publish for encoder ${encoder.id} — not configured for this tenant`)
@@ -35,8 +40,10 @@ async function publishToBrightSpot(tenant, encoder, title) {
   const { pageId, videoPageId } = await getEncoderBrightspotPages(encoder.tenant_id, encoder)
   console.log(`[BrightSpot] encoder "${encoder.name}" (${encoder.id}) -> brightspot_page_id=${pageId} brightspot_video_page_id=${videoPageId}`)
 
+  const standaloneWeather = Array.isArray(destinations) && destinations.includes('app')
+
   if (pageId) {
-    const { ok, status, body } = await updateEventHubVideo(creds, pageId, { standaloneWeather: false, title })
+    const { ok, status, body } = await updateViewNexaVideo(creds, pageId, { standaloneWeather, isLiveNowOverride: true })
     if (!ok) console.error(`[BrightSpot] update-video failed (${status}):`, body)
   }
 
@@ -52,8 +59,8 @@ async function publishToBrightSpot(tenant, encoder, title) {
     await supabase.from('encoders').update({ brightspot_original_headline: originalTitle }).eq('id', encoder.id)
   }
 
-  const { ok, status, body } = await updateEventHubVideoPageTitle(creds, videoPageId, title)
-  if (!ok) console.error(`[BrightSpot] update-videopage-heading failed (${status}):`, body)
+  const { ok, status, body } = await updateVideoPage(creds, videoPageId, title)
+  if (!ok) console.error(`[BrightSpot] update-videopage-headline failed (${status}):`, body)
   return { success: ok, stub: false }
 }
 
@@ -164,7 +171,7 @@ export default async function handler(req, res) {
     const fn = HANDLERS[dest]
     if (!fn) { results[dest] = { success: false, error: `Unknown destination: ${dest}` }; return }
     try {
-      const outcome = await fn(tenant || {}, encoder, title || encoder.name)
+      const outcome = await fn(tenant || {}, encoder, title || encoder.name, destinations)
       results[dest] = { success: true, ...outcome }
     } catch (err) {
       console.error(`[encoder-go-live] ${dest} failed:`, err.message)

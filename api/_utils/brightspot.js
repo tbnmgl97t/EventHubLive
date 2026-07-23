@@ -30,9 +30,9 @@ export async function brightspotCmaFetch(creds, path, opts = {}) {
 }
 
 // BrightSpot's custom EventHubLive endpoints (get-all-live-videos,
-// get-all-video-pages, get-video-page-by-id, update-videopage-heading, ...)
-// back the Encoder Page / Video Page pickers and the go-live/stop
-// orchestration in EncoderForm. These live on the tenant's CMS host and
+// get-all-video-pages, get-video-page-by-id, update-videopage-headline,
+// update-video) back the Encoder Page / Video Page pickers and the go-live/
+// stop orchestration in EncoderForm. These live on the tenant's CMS host and
 // require X-Site/X-API-Key headers on every call — global for now, not yet
 // confirmed tenant-specific.
 export async function brightspotEventHubFetch(creds, path, { method = 'GET' } = {}) {
@@ -68,23 +68,12 @@ export function mapEventHubItems(body) {
     .filter(item => item.id && item.name)
 }
 
-// BrightSpot's VideoPage title is currently exposed for testing under the
-// `html` query param, mapped by BrightSpot to the page's subHeadline field.
-// Product intends to move this to the real Headline field later — keeping
-// every read/write indirected through this constant means that's a one-line
-// change here, not a grep-and-replace across the orchestration code.
-const EVENTHUB_PAGE_TITLE_PARAM = 'html'
-
-// BrightSpot's ViewNexaVideo (encoder) title is currently exposed for
-// testing under the `sponsorText` query param — a separate temporary field
-// from the VideoPage's `html`/subHeadline title above (different content
-// type, different field). Same one-line-change rationale as
-// EVENTHUB_PAGE_TITLE_PARAM if BrightSpot swaps the underlying field later.
-const EVENTHUB_VIDEO_TITLE_PARAM = 'sponsorText'
+// BrightSpot's VideoPage title is exposed under the `headline` query param
+const EVENTHUB_PAGE_TITLE_PARAM = 'headline'
 
 const EVENTHUB_ENDPOINTS = {
   getVideoPage:         '/api/eventhublive/get-video-page-by-id',
-  updateVideoPageTitle: '/api/eventhublive/update-videopage-heading',
+  updateVideoPageTitle: '/api/eventhublive/update-videopage-headline',
   updateVideo:          '/api/eventhublive/update-video',
 }
 
@@ -114,13 +103,16 @@ export async function getEventHubVideoPageTitle(creds, id) {
   return { ok, status, title: state?.[EVENTHUB_PAGE_TITLE_PARAM] ?? state?._label ?? null }
 }
 
-export async function updateEventHubVideoPageTitle(creds, id, title) {
+export async function updateVideoPage(creds, id, title) {
   const query = toEventHubQuery({ 'with/_id': id, [EVENTHUB_PAGE_TITLE_PARAM]: title })
   return brightspotEventHubFetch(creds, `${EVENTHUB_ENDPOINTS.updateVideoPageTitle}?${query}`, { method: 'POST' })
 }
 
-export async function updateEventHubVideo(creds, id, { standaloneWeather, title }) {
-  const query = toEventHubQuery({ 'with/_id': id, standaloneWeather, [EVENTHUB_VIDEO_TITLE_PARAM]: title })
+// ViewNexaVideo (ViewNexa/encoder page) title is intentionally not touched by
+// this integration — only standaloneWeather and isLiveNowOverride are ever
+// written to it.
+export async function updateViewNexaVideo(creds, id, { standaloneWeather, isLiveNowOverride } = {}) {
+  const query = toEventHubQuery({ 'with/_id': id, standaloneWeather, isLiveNowOverride })
   return brightspotEventHubFetch(creds, `${EVENTHUB_ENDPOINTS.updateVideo}?${query}`, { method: 'POST' })
 }
 

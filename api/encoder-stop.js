@@ -13,14 +13,13 @@ import { canWrite }             from './_utils/auth.js'
 import { supabase }             from './_utils/supabase.js'
 import { youtubeRequest }       from './_utils/youtube.js'
 import { patchSchedule }        from './_utils/fast-channels.js'
-import { getEncoderBrightspotPages, updateEventHubVideoPageTitle } from './_utils/brightspot.js'
+import { getEncoderBrightspotPages, updateVideoPage, updateViewNexaVideo } from './_utils/brightspot.js'
 
-// Restores the BrightSpot VideoPage title to whatever it was before
+// Resets the ViewNexaVideo's standaloneWeather/isLiveNowOverride to false and
+// restores the BrightSpot VideoPage title to whatever it was before
 // encoder-go-live.js's publishToBrightSpot overwrote it, then clears the
-// stashed value so it doesn't leak into the next broadcast.
-//
-// TODO: ViewNexaVideo (sponsorText/standaloneWeather) update isn't wired up
-// yet — this only covers the VideoPage title for now.
+// stashed value so it doesn't leak into the next broadcast. ViewNexaVideo's
+// own title is never touched, so there's nothing to restore on that side.
 async function unpublishFromBrightSpot(tenant, encoder) {
   const creds = await getTenantBrightspotCreds(encoder.tenant_id)
   if (!creds) {
@@ -28,7 +27,13 @@ async function unpublishFromBrightSpot(tenant, encoder) {
     return { success: true, skipped: true }
   }
 
-  const { videoPageId } = await getEncoderBrightspotPages(encoder.tenant_id, encoder)
+  const { pageId, videoPageId } = await getEncoderBrightspotPages(encoder.tenant_id, encoder)
+
+  if (pageId) {
+    const { ok, status, body } = await updateViewNexaVideo(creds, pageId, { standaloneWeather: false, isLiveNowOverride: false })
+    if (!ok) console.error(`[BrightSpot] update-video (restore) failed (${status}):`, body)
+  }
+
   if (!videoPageId) {
     console.log(`[BrightSpot] Skipping unpublish for encoder ${encoder.id} — no video page assigned`)
     return { success: true, skipped: true }
@@ -43,8 +48,8 @@ async function unpublishFromBrightSpot(tenant, encoder) {
     return { success: true, skipped: true }
   }
 
-  const { ok, status, body } = await updateEventHubVideoPageTitle(creds, videoPageId, encoder.brightspot_original_headline)
-  if (!ok) console.error(`[BrightSpot] update-videopage-heading (restore) failed (${status}):`, body)
+  const { ok, status, body } = await updateVideoPage(creds, videoPageId, encoder.brightspot_original_headline)
+  if (!ok) console.error(`[BrightSpot] update-videopage-headline (restore) failed (${status}):`, body)
 
   await supabase.from('encoders').update({ brightspot_original_headline: null }).eq('id', encoder.id)
   return { success: ok, stub: false }
