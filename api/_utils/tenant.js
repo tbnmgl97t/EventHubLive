@@ -102,19 +102,25 @@ export async function getTenantJwCreds(tenantId) {
   return { siteId: data.jw_site_id, apiSecret: data.jw_api_secret }
 }
 
-/** Fetches a tenant's BrightSpot credentials, or null if not fully configured yet. */
+/**
+ * Fetches a tenant's BrightSpot credentials, or null if not fully configured
+ * yet. brightspot_client_id is intentionally not required here — it's only
+ * used by the (currently unavailable) Management API in brightspotCmaFetch,
+ * not the EventHubLive endpoints this also gates access to — but it's still
+ * selected/returned for callers that do need it.
+ */
 export async function getTenantBrightspotCreds(tenantId) {
   const { data } = await supabase
     .from('tenants')
     .select('brightspot_cms_url, brightspot_site_url, brightspot_api_key, brightspot_client_id')
     .eq('id', tenantId)
     .single()
-  if (!data?.brightspot_client_id || !data?.brightspot_api_key || !(data?.brightspot_site_url || data?.brightspot_cms_url)) return null
+  if (!data?.brightspot_api_key || !(data?.brightspot_site_url || data?.brightspot_cms_url)) return null
   return {
     cmsUrl:    data.brightspot_cms_url  || null,
     siteUrl:   data.brightspot_site_url || null,
     apiKey:    data.brightspot_api_key,
-    clientId:  data.brightspot_client_id,
+    clientId:  data.brightspot_client_id || null,
   }
 }
 

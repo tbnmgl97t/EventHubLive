@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Box, Typography, TextField, Button, CircularProgress, Alert, MenuItem,
@@ -108,36 +108,35 @@ function DefaultOnRow({ checked, onChange }) {
 }
 
 // ── BrightSpot page picker ──
-// Search dropdown backed by /api/brightspot-search-pages, with a manual
-// id/name fallback since BrightSpot search isn't available yet (see that
-// endpoint's comments) — flipping "Search instead" back on once it works
-// needs no further frontend changes.
+// Dropdown backed by /api/brightspot-search-pages, with a manual id/name
+// fallback. BrightSpot's endpoints don't accept a search term — they always
+// return the tenant's full list — so we fetch that list once (on first open)
+// and let the Autocomplete filter it locally as the user types, instead of
+// round-tripping to the backend per keystroke.
 function BrightSpotPagePicker({ label, kind, idValue, nameValue, onSelect, token, tenantId }) {
   const [manualMode, setManualMode] = useState(!!idValue)
-  const [query, setQuery]     = useState('')
   const [options, setOptions] = useState([])
+  const [loaded, setLoaded]   = useState(false)
   const [loading, setLoading] = useState(false)
   const [unavailable, setUnavailable] = useState(false)
-  const debounceRef = useRef(null)
 
-  useEffect(() => {
-    if (manualMode) return
-    clearTimeout(debounceRef.current)
-    if (!query.trim()) { setOptions([]); return }
-    debounceRef.current = setTimeout(() => {
-      setLoading(true)
-      fetch(`/api/brightspot-search-pages?q=${encodeURIComponent(query.trim())}&kind=${kind}`, { headers: authHeader(token, tenantId) })
-        .then(r => r.json())
-        .then(data => {
-          setUnavailable(data.available === false)
-          setOptions(data.pages || [])
-        })
-        .catch(() => { setOptions([]); setUnavailable(true) })
-        .finally(() => setLoading(false))
-    }, 350)
-    return () => clearTimeout(debounceRef.current)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, manualMode])
+  const value = useMemo(
+    () => (idValue ? { id: idValue, name: nameValue || idValue } : null),
+    [idValue, nameValue]
+  )
+
+  const loadOptions = () => {
+    if (loaded || loading) return
+    setLoading(true)
+    fetch(`/api/brightspot-search-pages?kind=${kind}`, { headers: authHeader(token, tenantId) })
+      .then(r => r.json())
+      .then(data => {
+        setUnavailable(data.available === false)
+        setOptions(data.pages || [])
+      })
+      .catch(() => { setOptions([]); setUnavailable(true) })
+      .finally(() => { setLoading(false); setLoaded(true) })
+  }
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
@@ -168,16 +167,15 @@ function BrightSpotPagePicker({ label, kind, idValue, nameValue, onSelect, token
           size="small" fullWidth
           options={options}
           loading={loading}
-          filterOptions={x => x}
+          onOpen={loadOptions}
           getOptionLabel={opt => (typeof opt === 'string' ? opt : (opt.name || opt.id || ''))}
           isOptionEqualToValue={(opt, val) => opt.id === val?.id}
-          value={idValue ? { id: idValue, name: nameValue || idValue } : null}
-          onInputChange={(e, val) => setQuery(val)}
+          value={value}
           onChange={(e, val) => onSelect(val?.id || '', val?.name || '')}
-          noOptionsText={unavailable ? 'BrightSpot search not available yet' : (query ? 'No matches' : 'Type to search…')}
+          noOptionsText={unavailable ? 'BrightSpot search not available yet' : 'No pages found'}
           renderInput={params => (
-            <TextField {...params} placeholder={`Search ${label.toLowerCase()}…`}
-              helperText={unavailable ? 'Search unavailable — use "Enter manually" for now' : undefined}
+            <TextField {...params} placeholder={`Select ${label.toLowerCase()}…`}
+              helperText={unavailable ? 'BrightSpot unavailable — use "Enter manually" for now' : undefined}
             />
           )}
         />
