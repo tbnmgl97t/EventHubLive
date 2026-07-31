@@ -58,7 +58,24 @@ async function deleteStream({ tenant, jw, streamId, streamName }) {
     } catch (e) { warnings.push(`facebook lookup: ${e.message}`) }
   }
 
-  // Supabase registry cleanup (non-fatal)
+  // Destroy the JW live broadcast channel itself. This must happen — and
+  // succeed — before any Supabase cleanup: PUT .../destroy/ is the actual
+  // channel-teardown call, distinct from DELETE /media/{id}/ (which only
+  // removes the mirrored media-library asset and leaves the channel able to
+  // go live again at its next scheduled window — see delete-stream.js for the
+  // full writeup). A 404 means it's already gone, which is fine; any other
+  // non-2xx throws so the Supabase ownership row is left in place and this
+  // stream gets retried on the next cron run instead of being orphaned.
+  const r = await fetch(`https://api.jwplayer.com/v2/sites/${jw.siteId}/live/broadcast/streams/${encodeURIComponent(streamId)}/destroy/`, {
+    method: 'PUT',
+    headers: { Authorization: jw.apiSecret, Accept: 'application/json' },
+  })
+  if (!r.ok && r.status !== 404) {
+    const body = await r.text()
+    throw new Error(`JW destroy failed (${r.status}): ${body}`)
+  }
+
+  // Supabase registry cleanup (non-fatal) — only after JW destroy is confirmed
   try {
     await Promise.all([
       supabase.from('streams').delete().eq('jw_stream_id', streamId),
@@ -77,16 +94,6 @@ async function deleteStream({ tenant, jw, streamId, streamName }) {
       warnings.push(`orphaned encoder(s) now pointing at a deleted channel: ${orphaned.map(e => `${e.name} (${e.id})`).join(', ')}`)
     }
   } catch (_) { /* non-fatal */ }
-
-  // Delete the JW media/broadcast stream itself
-  const r = await fetch(`https://api.jwplayer.com/v2/sites/${jw.siteId}/media/${streamId}/`, {
-    method: 'DELETE',
-    headers: { Authorization: jw.apiSecret, Accept: 'application/json' },
-  })
-  if (!r.ok) {
-    const body = await r.text()
-    throw new Error(`JW delete failed (${r.status}): ${body}`)
-  }
 
   return { streamId, streamName, warnings }
 }
