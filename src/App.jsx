@@ -5,6 +5,7 @@ import { createTenantTheme } from './theme/theme'
 import { TenantProvider, useTenant } from './contexts/TenantContext'
 import Admin from './components/Admin'
 import StreamPage from './components/StreamPage'
+import Homepage from './components/Homepage'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import TermsOfService from './components/TermsOfService'
 
@@ -17,7 +18,7 @@ function AppContent() {
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
       <Routes>
-        <Route path="/"                 element={<Admin />} />
+        <Route path="/"                 element={<Homepage />} />
         <Route path="/admin"            element={<Admin />} />
         <Route path="/admin/streams"   element={<Admin />} />
         <Route path="/admin/events"    element={<Admin />} />
