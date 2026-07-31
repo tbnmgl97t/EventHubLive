@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate, useLocation, Routes, Route } from 'react-router-dom'
+import { useNavigate, useLocation, Routes, Route, Link as RouterLink } from 'react-router-dom'
 import EHLLogo from './EHLLogo'
 import EncoderControl from './EncoderControl'
 import HlsWatcher from './HlsWatcher'
@@ -9,7 +9,7 @@ import EncoderList from './EncoderList'
 import EncoderForm from './EncoderForm'
 import { CdnRecordsPanel, PricingPanel } from './CostsExtras'
 import {
-  Box, Paper, Typography, TextField, Button, CircularProgress,
+  Box, Paper, Typography, TextField, Button, CircularProgress, Link,
   Alert, IconButton, Chip, Divider, Tooltip, Snackbar, Collapse,
   Dialog, DialogTitle, DialogContent, DialogActions,
   Drawer, InputAdornment,
@@ -68,7 +68,7 @@ function getSessionStreams(session) {
 
 // ─── Admin SaaS palette ───────────────────────────────────────────────────────
 
-const AP = {
+export const AP = {
   accent:    '#6366f1',
   accentHov: '#4f46e5',
   accentDim: 'rgba(99,102,241,0.08)',
@@ -390,6 +390,16 @@ function LoginScreen() {
         >
           {loading ? <CircularProgress size={18} sx={{ color: '#fff' }} /> : 'Sign In'}
         </Button>
+
+        <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mt: 3 }}>
+          <Link component={RouterLink} to="/privacy" sx={{ fontSize: '0.75rem', color: AP.muted, textDecoration: 'none', '&:hover': { color: AP.text } }}>
+            Privacy Policy
+          </Link>
+          <Typography sx={{ fontSize: '0.75rem', color: AP.muted }}>·</Typography>
+          <Link component={RouterLink} to="/terms" sx={{ fontSize: '0.75rem', color: AP.muted, textDecoration: 'none', '&:hover': { color: AP.text } }}>
+            Terms of Service
+          </Link>
+        </Box>
       </Paper>
     </Box>
   )
