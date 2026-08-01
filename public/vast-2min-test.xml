@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SSAI test ad pod — four sequential wrappers around Google's official IMA
+  sample linear ad tag (each ~30s), chained to produce a ~2 minute ad break
+  for testing JW/MediaTailor server-side ad insertion. Not used by the app
+  itself; a standalone fixture for manual SSAI testing.
+-->
+<VAST version="3.0">
+  <Ad id="pod-ad-1" sequence="1">
+    <Wrapper>
+      <AdSystem>EventHubLive SSAI Test</AdSystem>
+      <VASTAdTagURI><![CDATA[https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_ad_samples&sz=640x480&cust_params=sample_ct%3Dlinear&ciu_szs=300x250,728x90&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator=1]]></VASTAdTagURI>
+      <Impression></Impression>
+      <Creatives></Creatives>
+    </Wrapper>
+  </Ad>
+  <Ad id="pod-ad-2" sequence="2">
+    <Wrapper>
+      <AdSystem>EventHubLive SSAI Test</AdSystem>
+      <VASTAdTagURI><![CDATA[https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_ad_samples&sz=640x480&cust_params=sample_ct%3Dlinear&ciu_szs=300x250,728x90&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator=2]]></VASTAdTagURI>
+      <Impression></Impression>
+      <Creatives></Creatives>
+    </Wrapper>
+  </Ad>
+  <Ad id="pod-ad-3" sequence="3">
+    <Wrapper>
+      <AdSystem>EventHubLive SSAI Test</AdSystem>
+      <VASTAdTagURI><![CDATA[https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_ad_samples&sz=640x480&cust_params=sample_ct%3Dlinear&ciu_szs=300x250,728x90&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator=3]]></VASTAdTagURI>
+      <Impression></Impression>
+      <Creatives></Creatives>
+    </Wrapper>
+  </Ad>
+  <Ad id="pod-ad-4" sequence="4">
+    <Wrapper>
+      <AdSystem>EventHubLive SSAI Test</AdSystem>
+      <VASTAdTagURI><![CDATA[https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_ad_samples&sz=640x480&cust_params=sample_ct%3Dlinear&ciu_szs=300x250,728x90&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator=4]]></VASTAdTagURI>
+      <Impression></Impression>
+      <Creatives></Creatives>
+    </Wrapper>
+  </Ad>
+</VAST>
