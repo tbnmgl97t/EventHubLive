@@ -1,9 +1,12 @@
 import { Box } from '@mui/material'
 
 /**
- * EventHubLive wordmark — Treatment B
+ * EventHubLive lockup — Live Frame mark + wordmark
  *
- * Design spec (from EventHubLive Logo.html):
+ * Design spec (from the EventHubLive brand media kit v1.4):
+ *   - Mark:   "Live Frame" — a rounded-square viewport with a record dot at
+ *             its centre. Non-letterform, distinct app icon/logo mark used
+ *             for the favicon and Google OAuth consent screen.
  *   - Font:   Inter Tight, weight 700, tracking -0.04em
  *   - "EventHub" in base color (ink on light, bone on dark)
  *   - "Live"  in red accent (#ff3b30 light / #ff5247 dark)
@@ -22,6 +25,7 @@ export default function EHLLogo({ size = 28, dark = true, animate = true }) {
   const gap    = Math.round(size * 0.07)
   const rise   = Math.round(size * 0.06)
   const halo   = Math.round(dot * 0.45)
+  const mark   = Math.round(size * 1.3)
 
   return (
     <Box sx={{
@@ -35,6 +39,17 @@ export default function EHLLogo({ size = 28, dark = true, animate = true }) {
       color,
       userSelect: 'none',
     }}>
+      {/* Live Frame mark */}
+      <Box
+        component="svg"
+        viewBox="0 0 512 512"
+        aria-hidden="true"
+        sx={{ width: mark, height: mark, mr: `${Math.round(size * 0.25)}px`, flexShrink: 0 }}
+      >
+        <rect x="126" y="126" width="260" height="260" rx="64" fill="none" stroke={color} strokeWidth="28" />
+        <circle cx="256" cy="256" r="52" fill={accent} />
+      </Box>
+
       <Box component="span">EventHub</Box>
       <Box component="span" sx={{ color: accent }}>Live</Box>
 
