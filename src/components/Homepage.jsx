@@ -38,7 +38,7 @@ const FEATURES = [
   },
 ]
 
-/** Public, no-login-required homepage describing EventHub Live for prospective users and OAuth reviewers. */
+/** Public, no-login-required homepage describing EventHubLive for prospective users and OAuth reviewers. */
 export default function Homepage() {
   return (
     <ThemeProvider theme={homeTheme}>
@@ -52,7 +52,7 @@ export default function Homepage() {
               <EHLLogo size={44} dark animate />
             </Box>
             <Typography sx={{ fontSize: { xs: '1rem', sm: '1.15rem' }, color: AP.muted, maxWidth: 560, mx: 'auto', lineHeight: 1.6 }}>
-              EventHub Live is a broadcast management platform that lets news and media
+              EventHubLive is a broadcast management platform that lets news and media
               organizations configure encoders, launch live streams and 24/7 channels, and route
               them to destinations like YouTube, JW Player, and a CMS — all from one dashboard.
             </Typography>
@@ -67,7 +67,7 @@ export default function Homepage() {
           </Box>
 
           {/* What it does */}
-          <Typography variant="h6" sx={{ fontWeight: 700, mb: 2 }}>What EventHub Live Does</Typography>
+          <Typography variant="h6" sx={{ fontWeight: 700, mb: 2 }}>What EventHubLive Does</Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2, mb: 6 }}>
             {FEATURES.map(f => (
               <Paper key={f.title} elevation={0} sx={{ p: 2.5 }}>
@@ -79,11 +79,11 @@ export default function Homepage() {
 
           {/* Data use / transparency */}
           <Paper elevation={0} sx={{ p: { xs: 2.5, sm: 3.5 }, mb: 6 }}>
-            <Typography variant="h6" sx={{ fontWeight: 700, mb: 1.5 }}>How EventHub Live Uses Your Data</Typography>
+            <Typography variant="h6" sx={{ fontWeight: 700, mb: 1.5 }}>How EventHubLive Uses Your Data</Typography>
             <Typography sx={{ fontSize: '0.9rem', color: AP.text, lineHeight: 1.7, mb: 1.5 }}>
-              EventHub Live is an invitation-only platform used by authorized staff of Trilogy
+              EventHubLive is an invitation-only platform used by authorized staff of Trilogy
               Digital and its client organizations to manage broadcast operations. When an
-              organization connects its YouTube channel, EventHub Live requests access to the
+              organization connects its YouTube channel, EventHubLive requests access to the
               YouTube Data API solely to create, configure, and manage live broadcasts on that
               channel on the organization's behalf — for example, simulcasting a stream that is
               already airing. We do not access, use, or share YouTube data for advertising, and we

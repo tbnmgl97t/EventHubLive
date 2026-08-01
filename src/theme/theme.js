@@ -9,7 +9,7 @@ const DEFAULTS = {
 
 /**
  * Builds a MUI theme from tenant color config.
- * Falls back to EventHub Live defaults for any missing values.
+ * Falls back to EventHubLive defaults for any missing values.
  */
 export function createTenantTheme(colors = {}) {
   const c = { ...DEFAULTS, ...colors }

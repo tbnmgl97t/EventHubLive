@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react'
 
 export const DEFAULT_TENANT = {
   id:       'eventhub-live',
-  title:    'EventHub Live',
+  title:    'EventHubLive',
   subtitle: 'Live Event Streaming Platform',
   logo_url: '',
   timezone: 'America/New_York',
