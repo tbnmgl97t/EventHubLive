@@ -3439,7 +3439,7 @@ function YouTubeEditDialog({ open, onClose, integration }) {
         <IconButton size="small" onClick={onClose} sx={{ ml: 'auto' }}><CloseIcon fontSize="small" /></IconButton>
       </DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-        <Typography sx={{ fontSize: '0.75rem', color: AP.muted, mt: -1, mb: 0.5 }}>Simulcast live streams to your YouTube channel</Typography>
+        <Typography sx={{ fontSize: '0.75rem', color: AP.muted, mb: 0.5 }}>Simulcast live streams to your YouTube channel</Typography>
 
         {loading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
