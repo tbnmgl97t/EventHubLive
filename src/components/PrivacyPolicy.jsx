@@ -5,12 +5,12 @@ export default function PrivacyPolicy() {
     <LegalPageLayout title="Privacy Policy" updatedDate="July 31, 2026">
       <p>
         This Privacy Policy explains how Trilogy Digital Platforms, Inc. ("Trilogy Digital," "we," "us,"
-        or "our") collects, uses, and shares information in connection with EventHub Live (the "Service"),
+        or "our") collects, uses, and shares information in connection with EventHubLive (the "Service"),
         an internal broadcast management platform used by Trilogy Digital staff and authorized client
         organizations ("Tenants") to configure, launch, and monitor live video streams and simulcasts.
       </p>
       <p>
-        EventHub Live is an invitation-only, staff-facing administrative tool. It is not directed at, and
+        EventHubLive is an invitation-only, staff-facing administrative tool. It is not directed at, and
         is not intended for use by, members of the general public.
       </p>
 
@@ -41,18 +41,18 @@ export default function PrivacyPolicy() {
 
       <h2>2. Google User Data &amp; Limited Use Disclosure</h2>
       <p>
-        EventHub Live integrates with the YouTube Data API to let authorized users create, configure, and
+        EventHubLive integrates with the YouTube Data API to let authorized users create, configure, and
         manage live broadcasts on a connected YouTube channel on the Tenant's behalf (for example,
         simulcasting a live stream to YouTube). To do this, we request and store an OAuth access/refresh
         token scoped to the YouTube account the Tenant explicitly connects.
       </p>
       <p>
         We access only the YouTube data required to create and manage broadcasts and streams for the
-        connected channel. We do not use this data for advertising, and we do not sell it. EventHub Live's
+        connected channel. We do not use this data for advertising, and we do not sell it. EventHubLive's
         use and transfer to any other app of information received from Google APIs will adhere to the{' '}
         <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noreferrer">
           Google API Services User Data Policy
-        </a>, including the Limited Use requirements. A connected Tenant may revoke EventHub Live's access
+        </a>, including the Limited Use requirements. A connected Tenant may revoke EventHubLive's access
         to their Google account at any time from their{' '}
         <a href="https://myaccount.google.com/permissions" target="_blank" rel="noreferrer">
           Google Account security settings
@@ -72,7 +72,7 @@ export default function PrivacyPolicy() {
       <p>We do not sell personal information. We share information only as follows:</p>
       <ul>
         <li>
-          <strong>Service providers we use to operate EventHub Live:</strong> Supabase (authentication and
+          <strong>Service providers we use to operate EventHubLive:</strong> Supabase (authentication and
           database hosting) and Vercel (application hosting), each acting as a data processor on our behalf.
         </li>
         <li>
@@ -115,7 +115,7 @@ export default function PrivacyPolicy() {
 
       <h2>8. Children's Privacy</h2>
       <p>
-        EventHub Live is an internal business tool intended for use by adult staff and authorized
+        EventHubLive is an internal business tool intended for use by adult staff and authorized
         personnel only. It is not directed at children, and we do not knowingly collect information from
         anyone under the age of 18.
       </p>

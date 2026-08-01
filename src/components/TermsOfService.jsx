@@ -4,15 +4,15 @@ export default function TermsOfService() {
   return (
     <LegalPageLayout title="Terms of Service" updatedDate="July 31, 2026">
       <p>
-        These Terms of Service ("Terms") govern access to and use of EventHub Live (the "Service"), an
+        These Terms of Service ("Terms") govern access to and use of EventHubLive (the "Service"), an
         internal broadcast management platform provided by Trilogy Digital Platforms, Inc. ("Trilogy
         Digital," "we," "us," or "our"). By logging in to or otherwise using the Service, you agree to
         these Terms.
       </p>
 
-      <h2>1. Who Can Use EventHub Live</h2>
+      <h2>1. Who Can Use EventHubLive</h2>
       <p>
-        EventHub Live is an invitation-only tool for Trilogy Digital staff and authorized personnel of
+        EventHubLive is an invitation-only tool for Trilogy Digital staff and authorized personnel of
         Trilogy Digital's client organizations ("Tenants"). Accounts are provisioned by a Trilogy Digital
         or Tenant administrator; there is no public self-signup. You may not share your login credentials,
         and you are responsible for all activity that occurs under your account.
@@ -20,7 +20,7 @@ export default function TermsOfService() {
 
       <h2>2. Description of the Service</h2>
       <p>
-        EventHub Live allows authorized users to configure encoders and ingest points, schedule and launch
+        EventHubLive allows authorized users to configure encoders and ingest points, schedule and launch
         live video streams and 24/7 channels, route those streams to destinations such as a connected
         YouTube channel, JW Player, and BrightSpot CMS, and monitor and manage the resulting broadcasts and
         recordings.
@@ -37,7 +37,7 @@ export default function TermsOfService() {
 
       <h2>4. Third-Party Services</h2>
       <p>
-        EventHub Live integrates with third-party platforms, including Google/YouTube (via the YouTube
+        EventHubLive integrates with third-party platforms, including Google/YouTube (via the YouTube
         Data API), JW Player, and BrightSpot CMS. Your use of those integrations is also subject to the
         respective third party's own terms of service and policies, including the{' '}
         <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noreferrer">
